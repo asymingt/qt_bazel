@@ -1,0 +1,189 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_license//rules:license.bzl", "license")
+load("@rules_license//rules:license_kind.bzl", "license_kind")
+load(":qt_tools.bzl", "qt_write_file")
+
+package(
+    default_applicable_licenses = [":license"],
+    default_visibility = ["//visibility:public"],
+)
+
+license_kind(
+    name = "LicenseRef-Qt-Commercial",
+    conditions = ["restricted"],
+)
+
+license(
+    name = "license",
+    license_kinds = [
+        "@rules_license//licenses/spdx:BSD-3-Clause",
+    ],
+    license_text = "LICENSE",
+)
+
+exports_files(["LICENSE"])
+
+config_setting(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "linux_arm64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+alias(
+    name = "linux_aarch64",
+    actual = ":linux_arm64",
+)
+
+config_setting(
+    name = "osx_x86_64",
+    constraint_values = [
+        "@platforms//os:osx",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+alias(
+    name = "darwin_x86_64",
+    actual = ":osx_x86_64",
+)
+
+config_setting(
+    name = "osx_arm64",
+    constraint_values = [
+        "@platforms//os:osx",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+alias(
+    name = "darwin_arm64",
+    actual = ":osx_arm64",
+)
+
+config_setting(
+    name = "windows_x86_64",
+    constraint_values = [
+        "@platforms//os:windows",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "windows_arm64",
+    constraint_values = [
+        "@platforms//os:windows",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+alias(
+    name = "unix",
+    actual = select({
+        "@platforms//os:linux": "@platforms//os:linux",
+        "@platforms//os:macos": "@platforms//os:macos",
+        "//conditions:default": "@platforms//os:linux",
+    }),
+)
+
+alias(
+    name = "unix_x86_64",
+    actual = select({
+        ":linux_x86_64": ":linux_x86_64",
+        ":osx_x86_64": ":osx_x86_64",
+        "//conditions:default": ":linux_x86_64",
+    }),
+)
+
+alias(
+    name = "x86_64",
+    actual = "@platforms//cpu:x86_64",
+)
+
+alias(
+    name = "arm64",
+    actual = "@platforms//cpu:aarch64",
+)
+
+alias(
+    name = "aarch64",
+    actual = "@platforms//cpu:aarch64",
+)
+
+qt_write_file(
+    name = "win_cxxabi_shim_src",
+    out = "win_cxxabi_shim.cpp",
+    content = """#include <typeinfo>
+#include <new>
+#include <exception>
+#include <stdexcept>
+#include <cstddef>
+
+_LIBCPP_BEGIN_NAMESPACE_STD
+inline __libcpp_refstring::~__libcpp_refstring() {
+  struct _Rep_base { std::size_t len; std::size_t cap; int count; };
+  char* data = const_cast<char*>(__imp_);
+  _Rep_base* rep = reinterpret_cast<_Rep_base*>(data - sizeof(_Rep_base));
+  if (__atomic_add_fetch(&rep->count, -1, __ATOMIC_ACQ_REL) < 0) {
+    ::operator delete(rep);
+  }
+}
+_LIBCPP_END_NAMESPACE_STD
+
+namespace std {
+type_info::~type_info() {}
+bad_cast::bad_cast() noexcept {}
+bad_cast::~bad_cast() noexcept {}
+const char* bad_cast::what() const noexcept { return "std::bad_cast"; }
+bad_typeid::bad_typeid() noexcept {}
+bad_typeid::~bad_typeid() noexcept {}
+const char* bad_typeid::what() const noexcept { return "std::bad_typeid"; }
+
+exception::~exception() noexcept {}
+const char* exception::what() const noexcept { return "std::exception"; }
+bad_exception::~bad_exception() noexcept {}
+const char* bad_exception::what() const noexcept { return "std::bad_exception"; }
+bad_alloc::bad_alloc() noexcept {}
+bad_alloc::~bad_alloc() noexcept {}
+const char* bad_alloc::what() const noexcept { return "std::bad_alloc"; }
+bad_array_new_length::bad_array_new_length() noexcept {}
+bad_array_new_length::~bad_array_new_length() noexcept {}
+const char* bad_array_new_length::what() const noexcept { return "bad_array_new_length"; }
+
+logic_error::~logic_error() noexcept {}
+const char* logic_error::what() const noexcept { return __imp_.c_str(); }
+runtime_error::~runtime_error() noexcept {}
+const char* runtime_error::what() const noexcept { return __imp_.c_str(); }
+domain_error::~domain_error() noexcept {}
+invalid_argument::~invalid_argument() noexcept {}
+length_error::~length_error() noexcept {}
+out_of_range::~out_of_range() noexcept {}
+range_error::~range_error() noexcept {}
+overflow_error::~overflow_error() noexcept {}
+underflow_error::~underflow_error() noexcept {}
+} // namespace std
+""",
+)
+
+cc_library(
+    name = "win_cxxabi_shim",
+    srcs = select({
+        "@platforms//os:windows": [":win_cxxabi_shim_src"],
+        "//conditions:default": [],
+    }),
+    copts = [
+        "-fvisibility=hidden",
+        "-fvisibility-inlines-hidden",
+    ],
+    tags = ["LINKABLE_MORE_THAN_ONCE"],
+    visibility = ["//visibility:public"],
+)
