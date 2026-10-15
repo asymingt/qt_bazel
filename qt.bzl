@@ -47,7 +47,6 @@ qt_sync_headers = _qt_sync_headers
 # Map known @qtbase cc_library targets to their transitive cc_shared_library targets
 _QTBASE_SHARED_MAP = {
     "@qtbase//:core": ["@qtbase//:core_shared"],
-    "//repos/qtbase:core": ["@qtbase//:core_shared"],
     ":core": ["@qtbase//:core_shared"],
     "@qtbase//:concurrent": ["@qtbase//:concurrent_shared", "@qtbase//:core_shared"],
     ":concurrent": ["@qtbase//:concurrent_shared", "@qtbase//:core_shared"],
