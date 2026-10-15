@@ -2247,34 +2247,19 @@ def qt_resource(name, files = None, qrc_file = None, resources = None, prefix = 
     if not qrc_file:
         qrc_file = "qrc_%s.qrc" % name
 
-    # rcc resolves <file> paths relative to the .qrc file, which is generated
-    # under bazel-out/, so each entry must point back at the real file via a
-    # relative path. The alias keeps the logical resource name package-relative.
-    pkg = native.package_name()
-    pkg_prefix = pkg + "/" if pkg else ""
-    cmd = (
-        "out=$@; d=$$(dirname $$out); {" +
-        " printf '<RCC><qresource prefix=\"%s\">';" % prefix +
-        " for f in $(SRCS); do" +
-        "   printf '<file alias=\"%s\">%s</file>' \"$${f#" + pkg_prefix + "}\" \"$$(realpath -s --relative-to=$$d $$f)\";" +
-        " done;" +
-        " printf '</qresource></RCC>\\n';" +
-        " } > $$out"
-    )
-    native.genrule(
+    _qt_generate_qrc_rule(
         name = "%s_qrc" % name,
+        out = qrc_file,
+        prefix = prefix,
+        strip_prefix = native.package_name(),
         srcs = files,
-        outs = [qrc_file],
-        cmd = cmd,
     )
 
-    out_src = "qrc_%s.cpp" % name
-    native.genrule(
+    qt_rcc_internal(
         name = "%s_rcc" % name,
-        srcs = files + [":%s_qrc" % name],
-        outs = [out_src],
-        cmd = "QT_RCC_SOURCE_DATE_OVERRIDE=1 $(execpath @qtbase//:rcc) --name %s $(location :%s_qrc) --output $@" % (name, name),
-        tools = ["@qtbase//:rcc"],
+        qrc = ":%s_qrc" % name,
+        qrc_name = name,
+        data = files,
     )
 
     cc_library(
@@ -2297,13 +2282,11 @@ def qt_resource_via_qrc(name, qrc_file, files = [], deps = None, **kwargs):
     """
     if deps == None:
         deps = ["@qtbase//:core"]
-    out_src = "qrc_%s.cpp" % name
-    native.genrule(
+    qt_rcc_internal(
         name = "%s_rcc" % name,
-        srcs = files + [qrc_file],
-        outs = [out_src],
-        cmd = "QT_RCC_SOURCE_DATE_OVERRIDE=1 $(execpath @qtbase//:rcc) --name %s $(location %s) --output $@" % (name, qrc_file),
-        tools = ["@qtbase//:rcc"],
+        qrc = qrc_file,
+        qrc_name = name,
+        data = files,
     )
     cc_library(
         name = name,
@@ -2510,6 +2493,7 @@ def qt_cc_binary(
         extra_deps.append(":" + hdr_lib)
 
     cc_binary_kwargs = dict(kwargs)
+    cc_binary_kwargs["features"] = list(cc_binary_kwargs.get("features", [])) + ["compiler_param_file"]
     binary_deps = lib_deps + extra_deps
     if _needs_gui_plugin(lib_deps):
         # Interactive binaries additionally link the native QPA plugin for the
@@ -2643,6 +2627,9 @@ def qt_cc_test(
     else:
         resolved_dynamic_deps = _finalize_dynamic_deps(resolved_dynamic_deps)
 
+    cc_test_kwargs = dict(kwargs)
+    cc_test_kwargs["features"] = list(cc_test_kwargs.get("features", [])) + ["compiler_param_file"]
+
     cc_test(
         name = name,
         srcs = srcs + extra_srcs,
@@ -2651,5 +2638,5 @@ def qt_cc_test(
         deps = test_deps,
         dynamic_deps = resolved_dynamic_deps,
         env = test_env,
-        **kwargs
+        **cc_test_kwargs
     )
