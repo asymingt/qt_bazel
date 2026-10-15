@@ -106,42 +106,46 @@ def _moc_gen_impl(ctx):
         out_files.append(out_file)
         json_files.append(json_file)
 
-        args = ctx.actions.args()
-
-        # Always pass arguments through a moc @argfile (one argument per line,
-        # read verbatim). On Windows hosts QCoreApplication re-parses the raw
-        # command line with Qt's own quoting rules, which disagree with the
-        # shell's for values like -DQT_VERSION_STR=\"6.10.2\" and end up
-        # merging every following argument (including the input file and -o)
-        # into one. The argfile sidesteps command-line quoting entirely.
-        args.use_param_file("@%s", use_always = True)
-        args.set_param_file_format("multiline")
-        args.add("--no-warnings")
-        args.add("--output-json")
-        args.add("-I" + hdr.dirname)
+        # Write moc options to an explicit @argfile (one argument per line, read
+        # verbatim by moc's argumentsFromCommandLineAndFile). We avoid passing
+        # `arguments = [args]` with `use_param_file` to `ctx.actions.run_shell`
+        # because when `cmd` is long (e.g. when `target_srcs` has 70+ files),
+        # Bazel spills `cmd` to a `.run_shell_N.sh` file and invokes
+        # `bash -c <script>.sh @<params>` without `"$@"`, causing bash to drop
+        # `@<params>` into `$0` and leave `$@` empty Inside the script.
+        rsp_file = ctx.actions.declare_file(ctx.label.name + "_out/" + out_name + ".rsp")
+        rsp = ctx.actions.args()
+        rsp.set_param_file_format("multiline")
+        rsp.add("--no-warnings")
+        rsp.add("--output-json")
+        rsp.add("-I" + hdr.dirname)
         for inc in include_dirs:
-            args.add("-I" + inc)
+            rsp.add("-I" + inc)
         for d in defines:
             if not d.startswith("-D"):
-                args.add("-D" + d)
+                rsp.add("-D" + d)
             else:
-                args.add(d)
+                rsp.add(d)
         for a in extra_args:
-            args.add(a)
+            rsp.add(a)
         rel_hdr = hdr.path
         if hdr.root.path and rel_hdr.startswith(hdr.root.path + "/"):
             rel_hdr = rel_hdr[len(hdr.root.path) + 1:]
         if hdr.owner and hdr.owner.workspace_root and rel_hdr.startswith(hdr.owner.workspace_root + "/"):
             rel_hdr = rel_hdr[len(hdr.owner.workspace_root) + 1:]
-        args.add("-f" + rel_hdr)
-        args.add(hdr.path)
-        args.add("-o", out_file.path + ".tmp")
+        rsp.add("-f" + rel_hdr)
+        rsp.add(hdr.path)
+        rsp.add("-o", out_file.path + ".tmp")
+        ctx.actions.write(
+            output = rsp_file,
+            content = rsp,
+        )
 
         if target_src_paths:
             cmd = """set -e
 rm -f "{out}.tmp" "{out}.tmp.json"
 touch "{out}.tmp"
-"{moc}" "$@"
+"{moc}" "@{rsp}"
 mv "{out}.tmp.json" "{json_out}"
 if grep -q 'include *[<\"]{out_name}[\">]' {target_srcs} 2>/dev/null; then
   printf '#if __INCLUDE_LEVEL__ > 0\\n' > "{out}"
@@ -156,26 +160,27 @@ rm -f "{out}.tmp"
                 json_out = json_file.path,
                 out_name = out_name,
                 moc = moc.path,
+                rsp = rsp_file.path,
                 target_srcs = target_src_paths,
             )
         else:
             cmd = """set -e
 rm -f "{out}.tmp" "{out}.tmp.json"
 touch "{out}.tmp"
-"{moc}" "$@"
+"{moc}" "@{rsp}"
 mv "{out}.tmp.json" "{json_out}"
 mv "{out}.tmp" "{out}"
 """.format(
                 out = out_file.path,
                 json_out = json_file.path,
                 moc = moc.path,
+                rsp = rsp_file.path,
             )
 
         ctx.actions.run_shell(
             tools = [moc],
-            inputs = all_inputs,
+            inputs = depset(direct = [rsp_file], transitive = [all_inputs]),
             outputs = [out_file, json_file],
-            arguments = [args],
             command = cmd,
             mnemonic = "QtMocHdr",
             progress_message = "Running moc on header %s" % hdr.short_path,
@@ -189,33 +194,37 @@ mv "{out}.tmp" "{out}"
         out_files.append(out_file)
         json_files.append(json_file)
 
-        args = ctx.actions.args()
-        args.use_param_file("@%s", use_always = True)  # see QtMocHdr above
-        args.set_param_file_format("multiline")
-        args.add("--no-warnings")
-        args.add("--output-json")
-        args.add("-i")
-        args.add("-I" + src.dirname)
+        rsp_file = ctx.actions.declare_file(ctx.label.name + "_out/" + out_name + ".rsp")
+        rsp = ctx.actions.args()
+        rsp.set_param_file_format("multiline")
+        rsp.add("--no-warnings")
+        rsp.add("--output-json")
+        rsp.add("-i")
+        rsp.add("-I" + src.dirname)
         for inc in include_dirs:
-            args.add("-I" + inc)
+            rsp.add("-I" + inc)
         for d in defines:
             if not d.startswith("-D"):
-                args.add("-D" + d)
+                rsp.add("-D" + d)
             else:
-                args.add(d)
+                rsp.add(d)
         for a in extra_args:
-            args.add(a)
-        args.add(src.path)
-        args.add("-o", out_file.path)
+            rsp.add(a)
+        rsp.add(src.path)
+        rsp.add("-o", out_file.path)
+        ctx.actions.write(
+            output = rsp_file,
+            content = rsp,
+        )
 
         ctx.actions.run_shell(
             tools = [moc],
-            inputs = all_inputs,
+            inputs = depset(direct = [rsp_file], transitive = [all_inputs]),
             outputs = [out_file, json_file],
-            arguments = [args],
-            command = 'touch "{out}" && "{moc}" "$@"'.format(
+            command = 'touch "{out}" && "{moc}" "@{rsp}"'.format(
                 out = out_file.path,
                 moc = moc.path,
+                rsp = rsp_file.path,
             ),
             mnemonic = "QtMocSrc",
             progress_message = "Running moc on source %s" % src.short_path,
@@ -224,6 +233,8 @@ mv "{out}.tmp" "{out}"
     collected_json = ctx.actions.declare_file(ctx.label.name + "_metatypes.json")
     if json_files:
         collect_args = ctx.actions.args()
+        collect_args.use_param_file("@%s", use_always = True)
+        collect_args.set_param_file_format("multiline")
         collect_args.add("--collect-json")
         collect_args.add("-o", collected_json.path)
         collect_args.add_all(json_files)
@@ -256,23 +267,22 @@ mv "{out}.tmp" "{out}"
     compile_srcs = out_files
     if ctx.attr.unity and hdr_moc_files:
         unity_file = ctx.actions.declare_file(ctx.label.name + "_out/" + ctx.label.name + "_mocs_compilation.cpp")
+        hdr_moc_paths = " ".join(['"{}"'.format(f.path) for f in hdr_moc_files])
         unity_cmd = """set -e
-out="$1"; shift
-: > "$out"
-for f in "$@"; do
+: > "{out}"
+for f in {files}; do
   if head -n 1 "$f" | grep -q '__INCLUDE_LEVEL__'; then
     continue
   fi
-  printf '#include "%s"\\n' "$(basename "$f")" >> "$out"
+  printf '#include "%s"\\n' "$(basename "$f")" >> "{out}"
 done
-"""
-        unity_args = ctx.actions.args()
-        unity_args.add(unity_file.path)
-        unity_args.add_all(hdr_moc_files)
+""".format(
+            out = unity_file.path,
+            files = hdr_moc_paths,
+        )
         ctx.actions.run_shell(
             inputs = hdr_moc_files,
             outputs = [unity_file],
-            arguments = [unity_args],
             command = unity_cmd,
             mnemonic = "QtMocUnity",
             progress_message = "Generating mocs_compilation.cpp for %s" % ctx.label.name,
