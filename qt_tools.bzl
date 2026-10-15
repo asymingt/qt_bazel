@@ -107,6 +107,15 @@ def _moc_gen_impl(ctx):
         json_files.append(json_file)
 
         args = ctx.actions.args()
+
+        # Always pass arguments through a moc @argfile (one argument per line,
+        # read verbatim). On Windows hosts QCoreApplication re-parses the raw
+        # command line with Qt's own quoting rules, which disagree with the
+        # shell's for values like -DQT_VERSION_STR=\"6.10.2\" and end up
+        # merging every following argument (including the input file and -o)
+        # into one. The argfile sidesteps command-line quoting entirely.
+        args.use_param_file("@%s", use_always = True)
+        args.set_param_file_format("multiline")
         args.add("--no-warnings")
         args.add("--output-json")
         args.add("-I" + hdr.dirname)
@@ -181,6 +190,8 @@ mv "{out}.tmp" "{out}"
         json_files.append(json_file)
 
         args = ctx.actions.args()
+        args.use_param_file("@%s", use_always = True)  # see QtMocHdr above
+        args.set_param_file_format("multiline")
         args.add("--no-warnings")
         args.add("--output-json")
         args.add("-i")
