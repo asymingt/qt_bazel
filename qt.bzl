@@ -2219,7 +2219,10 @@ def qt_ui_library(name, src = None, uis = None, deps = None, **kwargs):
             name = gen_name,
             srcs = [u],
             outs = [out_hdr],
-            cmd = "$(execpath @qtbase//:uic) $(location %s) -o $@" % u,
+            cmd = select({
+                Label("@platforms//os:linux"): "LC_ALL=C.UTF-8 $(execpath @qtbase//:uic) $(location %s) -o $@" % u,
+                "//conditions:default": "$(execpath @qtbase//:uic) $(location %s) -o $@" % u,
+            }),
             tools = ["@qtbase//:uic"],
         )
         uic_hdrs.append(":" + gen_name)

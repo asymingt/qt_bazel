@@ -77,11 +77,15 @@ def _qt_wayland_protocol_impl(ctx):
                 inc = include_dir,
             )
 
+        env = {}
+        if not qtwaylandscanner.path.endswith(".exe") and "macos" not in qtwaylandscanner.path and "darwin" not in qtwaylandscanner.path:
+            env["LC_ALL"] = "C.UTF-8"
         ctx.actions.run_shell(
             tools = [wayland_scanner, qtwaylandscanner],
             inputs = [proto],
             outputs = [c_hdr, c_src, qt_hdr, qt_src],
             command = cmd,
+            env = env,
             mnemonic = "QtWaylandScanner",
             progress_message = "Generating Wayland %s protocol %s" % (mode, proto.short_path),
         )

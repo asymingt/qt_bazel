@@ -742,6 +742,12 @@ qt_generate_qrc = rule(
     },
 )
 
+def _tool_env(tool, extra = None):
+    env = dict(extra) if extra else {}
+    if not tool.path.endswith(".exe") and "macos" not in tool.path and "darwin" not in tool.path:
+        env["LC_ALL"] = "C.UTF-8"
+    return env
+
 def _qt_rcc_internal_impl(ctx):
     rcc = ctx.executable.rcc_tool
     out = ctx.actions.declare_file("qrc_" + ctx.label.name + ".cpp")
@@ -756,7 +762,7 @@ def _qt_rcc_internal_impl(ctx):
         inputs = [ctx.file.qrc] + ctx.files.data,
         outputs = [out],
         arguments = [args],
-        env = {"QT_RCC_SOURCE_DATE_OVERRIDE": "1"},
+        env = _tool_env(rcc, {"QT_RCC_SOURCE_DATE_OVERRIDE": "1"}),
         mnemonic = "QtRcc",
         progress_message = "Running rcc on %s" % ctx.file.qrc.short_path,
     )
@@ -806,6 +812,7 @@ cd "{out_dir}"
         inputs = [grammar],
         outputs = outs,
         command = cmd,
+        env = _tool_env(qlalr),
         mnemonic = "QtLalr",
         progress_message = "Running qlalr on %s" % grammar.short_path,
     )
@@ -872,6 +879,7 @@ def _qt_qml_type_registration_impl(ctx):
             inputs = [],
             outputs = [jsroot_qmltypes],
             arguments = [js_args],
+            env = _tool_env(tool),
             mnemonic = "QtQmlJsRootTypes",
             progress_message = "Generating jsroot.qmltypes for %s" % ctx.label.name,
         )
@@ -882,6 +890,7 @@ def _qt_qml_type_registration_impl(ctx):
         inputs = [metatypes_json] + foreign_jsons,
         outputs = [out_cpp, out_qmltypes],
         arguments = [args],
+        env = _tool_env(tool),
         mnemonic = "QtQmlTypeRegistrar",
         progress_message = "Running qmltyperegistrar for %s (%s)" % (ctx.label.name, ctx.attr.import_name),
     )
@@ -1134,6 +1143,7 @@ def _qt_qsb_gen_impl(ctx):
             inputs = [src] + ctx.files.hdrs,
             outputs = [out_file],
             arguments = [args],
+            env = _tool_env(qsb),
             mnemonic = "QtQsb",
             progress_message = "Compiling shader %s -> %s" % (src.short_path, rel_out),
         )
@@ -1168,6 +1178,7 @@ def _qt_qsb_gen_impl(ctx):
                 inputs = [src] + ctx.files.hdrs,
                 outputs = [mv_out_file],
                 arguments = [mv_args],
+                env = _tool_env(qsb),
                 mnemonic = "QtQsbMultiview",
                 progress_message = "Compiling multiview shader %s -> %s" % (src.short_path, mv_rel_out),
             )
@@ -1205,7 +1216,7 @@ def _qt_qsb_gen_impl(ctx):
         inputs = [qrc_out] + qsb_files,
         outputs = [cpp_out],
         arguments = [rcc_args],
-        env = {"QT_RCC_SOURCE_DATE_OVERRIDE": "1"},
+        env = _tool_env(rcc, {"QT_RCC_SOURCE_DATE_OVERRIDE": "1"}),
         mnemonic = "QtRccShaders",
         progress_message = "Embedding compiled shaders for %s" % ctx.label.name,
     )
@@ -1309,6 +1320,7 @@ def _qt_qml_cachegen_impl(ctx):
             inputs = [src, qmldir_file] + ctx.files.qmltypes,
             outputs = [out_cpp],
             arguments = [args],
+            env = _tool_env(qmlcachegen),
             mnemonic = "QtQmlCacheGen",
             progress_message = "Compiling QML %s" % src.short_path,
         )
@@ -1329,6 +1341,7 @@ def _qt_qml_cachegen_impl(ctx):
         inputs = [rsp_file],
         outputs = [loader_cpp],
         arguments = [loader_args],
+        env = _tool_env(qmlcachegen),
         mnemonic = "QtQmlCacheLoader",
         progress_message = "Generating QML cache loader for %s" % ctx.attr.target_name,
     )
@@ -1364,7 +1377,7 @@ def _qt_qml_cachegen_impl(ctx):
         inputs = [qrc_out] + ctx.files.qml_files,
         outputs = [raw_qrc_cpp],
         arguments = [rcc_args],
-        env = {"QT_RCC_SOURCE_DATE_OVERRIDE": "1"},
+        env = _tool_env(rcc, {"QT_RCC_SOURCE_DATE_OVERRIDE": "1"}),
         mnemonic = "QtRccRawQml",
         progress_message = "Embedding raw QML files for %s" % ctx.attr.target_name,
     )
@@ -1443,6 +1456,7 @@ cd "{out_dir}"
             inputs = [src],
             outputs = [out_h, out_cpp],
             command = cmd,
+            env = _tool_env(tool),
             mnemonic = "QtDbusXml2Cpp",
             progress_message = "Running qdbusxml2cpp on %s" % src.short_path,
         )
@@ -1507,6 +1521,7 @@ def _qt_rep_impl(ctx):
             arguments = [args],
             inputs = [src],
             outputs = [out_h],
+            env = _tool_env(repc),
             mnemonic = "QtRepc",
             progress_message = "Running repc (%s) on %s" % (mode, src.short_path),
         )
@@ -1569,6 +1584,7 @@ def _qt_scxml_impl(ctx):
             arguments = [args],
             inputs = [src],
             outputs = [out_h, out_cpp],
+            env = _tool_env(qscxmlc),
             mnemonic = "QtScxmlc",
             progress_message = "Running qscxmlc on %s" % src.short_path,
         )
@@ -1630,6 +1646,7 @@ def _qt_translation_impl(ctx):
             arguments = [args],
             inputs = [src],
             outputs = [out_qm],
+            env = _tool_env(lrelease),
             mnemonic = "QtLrelease",
             progress_message = "Running lrelease on %s" % src.short_path,
         )
