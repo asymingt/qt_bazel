@@ -618,13 +618,6 @@ _EXPORT_HEADER_TEMPLATE = """// Copyright (C) 2022 The Qt Company Ltd.
 #include <QtCore/qtconfigmacros.h> // Q_{infix}_EXPORT
 #include <QtCore/qtdeprecationmarkers.h> // QT_DEPRECATED_VERSION_X_{infix}
 
-#ifdef __MINGW32__
-#  undef Q_DECL_EXPORT
-#  undef Q_DECL_IMPORT
-#  define Q_DECL_EXPORT
-#  define Q_DECL_IMPORT
-#endif
-
 #if (defined(QT_SHARED) || !defined(QT_STATIC)) && !defined(QT_STATIC_{infix}_LIB)
 #  if defined(QT_BUILD_{infix}_LIB)
 #    define Q_{infix}_EXPORT Q_DECL_EXPORT
@@ -1807,7 +1800,17 @@ def _qt_cc_library_impl(ctx):
             additional_inputs = additional_inputs,
             linking_contexts = linking_contexts,
             user_link_flags = cc_helper.linkopts(ctx, additional_make_variable_substitutions, cc_toolchain),
-            alwayslink = ctx.attr.alwayslink,
+            # On Windows, Qt headers mark every exported symbol dllimport for
+            # consumers, so objects reference `__imp_<sym>`. Tools such as
+            # uic/rcc/qmlcachegen link Qt statically; lld can only satisfy an
+            # `__imp_` reference from a local definition (LNK4217) when that
+            # definition is already loaded, and it never pulls archive members
+            # in for `__imp_` references. Forcing whole-archive linking makes
+            # every definition available. DLL consumers are unaffected, since
+            # cc_shared_library already links its roots whole-archive. This only
+            # matters for native Windows builds, where those tools are built for
+            # the (Windows) exec platform.
+            alwayslink = ctx.attr.alwayslink or is_windows_enabled,
             disallow_dynamic_library = not create_dynamic_library,
             variables_extension = link_variables,
         )
