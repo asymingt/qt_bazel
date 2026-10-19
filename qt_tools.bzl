@@ -394,7 +394,11 @@ def _qt_sync_headers_impl(ctx):
     syncqt = ctx.executable.syncqt_tool
     mod = ctx.attr.module_name
     ver = ctx.attr.version
-    inc_dir = ctx.actions.declare_directory(ctx.label.name + "_include")
+    # syncqt writes <dir>/<Module>/<ver>/<Module>/private/<header>; on Windows
+    # hosts (no long-path support in syncqt.exe) long target + module names push
+    # that past MAX_PATH (260). Use a short, per-target directory name instead of
+    # `<target name>_include`.
+    inc_dir = ctx.actions.declare_directory("_qsh%d" % (hash(ctx.label.name) & 0x7fffffff))
 
     if ctx.label.workspace_root:
         src_dir = ctx.label.workspace_root + "/" + ctx.attr.source_dir if ctx.attr.source_dir else ctx.label.workspace_root
