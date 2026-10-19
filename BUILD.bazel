@@ -24,6 +24,11 @@ license(
 exports_files(["LICENSE"])
 
 config_setting(
+    name = "debug_build",
+    values = {"compilation_mode": "dbg"},
+)
+
+config_setting(
     name = "linux_x86_64",
     constraint_values = [
         "@platforms//os:linux",
@@ -186,4 +191,13 @@ cc_library(
     ],
     tags = ["LINKABLE_MORE_THAN_ONCE"],
     visibility = ["//visibility:public"],
+)
+
+# ELF symbol version node applied to every Qt module shared library on Linux
+# (F-ABI-4), matching upstream's `Qt_6` version tag so binaries built against
+# official Qt and against this build resolve the same versioned symbols.
+qt_write_file(
+    name = "qt6_version_script",
+    out = "qt6.version",
+    content = "Qt_6 {\n  *;\n};\n",
 )

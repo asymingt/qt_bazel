@@ -2,7 +2,7 @@
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
-load(":qt_tools.bzl", "moc_gen", "moc_out_copts", "qt_cc_library", "qt_qml_cachegen", "qt_qml_type_registration", "qt_qmldir")
+load(":qt_tools.bzl", "moc_gen", "moc_out_copts", "qt_cc_library", "qt_generate_qmldir_content", "qt_qml_cachegen", "qt_qml_type_registration", "qt_qmldir")
 
 QT_PLATFORM_COPTS = select({
     Label("@platforms//os:windows"): [
@@ -63,6 +63,7 @@ def qt_internal_library(
         moc_unity = False,
         applicable_licenses = None,
         target_compatible_with = None,
+        testonly = None,
         visibility = None,
         tags = []):
     """Builds a Qt module cc_library and its corresponding LGPL cc_shared_library.
@@ -95,12 +96,15 @@ def qt_internal_library(
         resolve. Recommended for new modules.
       applicable_licenses: Optional license labels forwarded to `cc_library`.
       target_compatible_with: Optional platform compatibility constraints.
+      testonly: Optional testonly flag forwarded to generated targets.
       visibility: Forwarded to both targets.
       tags: Forwarded to all generated targets.
     """
     common_kwargs = {}
     if target_compatible_with != None:
         common_kwargs["target_compatible_with"] = target_compatible_with
+    if testonly != None:
+        common_kwargs["testonly"] = testonly
 
     if not create_shared and type(local_defines) == type([]):
         static_lib_defines = []
@@ -121,14 +125,70 @@ def qt_internal_library(
 
     if moc_hdrs or moc_srcs or qml_args != None:
         moc_hdr_target = name + "_moc_hdrs"
+        foreign_types = list(qml_args.get("foreign_types", [])) if qml_args else []
+        if qml_args != None and type(deps) == type([]):
+            auto_ft_map = {
+                "@qtbase//:core": "@qtbase//:core_moc_hdrs",
+                ":core": ":core_moc_hdrs",
+                "@qtbase//:gui": "@qtbase//:gui_moc_hdrs",
+                ":gui": ":gui_moc_hdrs",
+                "@qtbase//:network": "@qtbase//:network_moc_hdrs",
+                ":network": ":network_moc_hdrs",
+                "@qtdeclarative//:qml": "@qtdeclarative//:qml_moc_hdrs",
+                ":qml": ":qml_moc_hdrs",
+                "@qtdeclarative//:qmlmodels": "@qtdeclarative//:qmlmodels_moc_hdrs",
+                ":qmlmodels": ":qmlmodels_moc_hdrs",
+                "@qtdeclarative//:quick": "@qtdeclarative//:quick_moc_hdrs",
+                ":quick": ":quick_moc_hdrs",
+                "@qtdeclarative//:quickshapes": "@qtdeclarative//:quickshapes_moc_hdrs",
+                ":quickshapes": ":quickshapes_moc_hdrs",
+                "@qtdeclarative//:quicktemplates2": "@qtdeclarative//:quicktemplates2_moc_hdrs",
+                ":quicktemplates2": ":quicktemplates2_moc_hdrs",
+                "@qtdeclarative//:quickcontrols2": "@qtdeclarative//:quickcontrols2_moc_hdrs",
+                ":quickcontrols2": ":quickcontrols2_moc_hdrs",
+                "@qtdeclarative//:quickcontrols2impl": "@qtdeclarative//:quickcontrols2impl_moc_hdrs",
+                ":quickcontrols2impl": ":quickcontrols2impl_moc_hdrs",
+                "@qtdeclarative//:quickcontrols2basic": "@qtdeclarative//:quickcontrols2basic_moc_hdrs",
+                ":quickcontrols2basic": ":quickcontrols2basic_moc_hdrs",
+                "@qtdeclarative//:quickcontrols2basicstyleimpl": "@qtdeclarative//:quickcontrols2basicstyleimpl_moc_hdrs",
+                ":quickcontrols2basicstyleimpl": ":quickcontrols2basicstyleimpl_moc_hdrs",
+                "@qtdeclarative//:quickcontrols2fusionstyleimpl": "@qtdeclarative//:quickcontrols2fusionstyleimpl_moc_hdrs",
+                ":quickcontrols2fusionstyleimpl": ":quickcontrols2fusionstyleimpl_moc_hdrs",
+                "@qtdeclarative//:quickcontrols2materialstyleimpl": "@qtdeclarative//:quickcontrols2materialstyleimpl_moc_hdrs",
+                ":quickcontrols2materialstyleimpl": ":quickcontrols2materialstyleimpl_moc_hdrs",
+                "@qtdeclarative//:quickcontrols2universalstyleimpl": "@qtdeclarative//:quickcontrols2universalstyleimpl_moc_hdrs",
+                ":quickcontrols2universalstyleimpl": ":quickcontrols2universalstyleimpl_moc_hdrs",
+                "@qtdeclarative//:quickcontrols2fluentwinui3styleimpl": "@qtdeclarative//:quickcontrols2fluentwinui3styleimpl_moc_hdrs",
+                ":quickcontrols2fluentwinui3styleimpl": ":quickcontrols2fluentwinui3styleimpl_moc_hdrs",
+                "@qtdeclarative//:quickdialogs2utils": "@qtdeclarative//:quickdialogs2utils_moc_hdrs",
+                ":quickdialogs2utils": ":quickdialogs2utils_moc_hdrs",
+                "@qtdeclarative//:quickdialogs2quickimpl": "@qtdeclarative//:quickdialogs2quickimpl_moc_hdrs",
+                ":quickdialogs2quickimpl": ":quickdialogs2quickimpl_moc_hdrs",
+                "@qtdeclarative//:labsfoldermodel": "@qtdeclarative//:labsfoldermodel_moc_hdrs",
+                ":labsfoldermodel": ":labsfoldermodel_moc_hdrs",
+                "@qtquick3d//:quick3d": "@qtquick3d//:quick3d_moc_hdrs",
+                ":quick3d": ":quick3d_moc_hdrs",
+                "@qtquick3d//:quick3druntimerender": "@qtquick3d//:quick3druntimerender_moc_hdrs",
+                ":quick3druntimerender": ":quick3druntimerender_moc_hdrs",
+                "@qtpositioning//:positioning": "@qtpositioning//:positioning_moc_hdrs",
+                ":positioning": ":positioning_moc_hdrs",
+                "@qtpositioning//:positioningquick": "@qtpositioning//:positioningquick_moc_hdrs",
+                ":positioningquick": ":positioningquick_moc_hdrs",
+                ":virtualkeyboard": ":virtualkeyboard_moc_hdrs",
+                ":virtualkeyboardsettings": ":virtualkeyboardsettings_moc_hdrs",
+            }
+            for d in deps:
+                if type(d) == type("") and d in auto_ft_map:
+                    ft_lbl = auto_ft_map[d]
+                    if ft_lbl not in foreign_types:
+                        foreign_types.append(ft_lbl)
         if type(deps) == type([]):
             moc_deps = list(deps) + extra_deps
-            if qml_args:
-                for ft in qml_args.get("foreign_types", []):
-                    if ft not in moc_deps:
-                        moc_deps.append(ft)
+            for ft in foreign_types:
+                if ft not in moc_deps:
+                    moc_deps.append(ft)
         else:
-            moc_deps = deps + (qml_args.get("foreign_types", []) if qml_args else [])
+            moc_deps = deps + foreign_types
         moc_gen(
             name = moc_hdr_target,
             hdrs = moc_hdrs,
@@ -175,6 +235,29 @@ def qt_internal_library(
         if qml_args != None:
             uri = qml_args.get("uri") or qml_args.get("import_name")
             qmldir_content = qml_args.get("qmldir_content") or qml_args.get("qmldir")
+            if qmldir_content == None and not qml_args.get("no_qmldir", False):
+                qmldir_content = qt_generate_qmldir_content(
+                    uri = uri,
+                    major_version = qml_args.get("major_version", "6"),
+                    minor_version = qml_args.get("minor_version", "10"),
+                    past_major_versions = qml_args.get("past_major_versions", []),
+                    linktarget = qml_args.get("linktarget", None),
+                    plugin_target = qml_args.get("plugin_target", None),
+                    class_name = qml_args.get("class_name", qml_args.get("plugin_class_name", None)),
+                    plugin_optional = qml_args.get("plugin_optional", True),
+                    typeinfo = qml_args.get("typeinfo", "plugins.qmltypes"),
+                    designer_supported = qml_args.get("designer_supported", False),
+                    default_imports = qml_args.get("default_imports", []),
+                    imports = qml_args.get("imports", qml_args.get("qml_imports", [])),
+                    optional_imports = qml_args.get("optional_imports", []),
+                    depends = qml_args.get("depends", qml_args.get("qml_depends", [])),
+                    prefer = qml_args.get("prefer", None),
+                    qml_files = qml_args.get("qmldir_qml_files", qml_args.get("qml_files", [])),
+                    strip_prefix = qml_args.get("qml_strip_prefix", ""),
+                    qml_singletons = qml_args.get("qml_singletons", []),
+                    qml_internal_files = qml_args.get("qml_internal_files", []),
+                    qml_source_versions = qml_args.get("qml_source_versions", {}),
+                )
 
             # qmltyperegistrar emits `#if __has_include(<private/x_p.h>)` for
             # private headers when --private-includes is given; that only
@@ -197,12 +280,21 @@ def qt_internal_library(
                 past_major_versions = qml_args.get("past_major_versions", []),
                 follow_foreign_versioning = qml_args.get("follow_foreign_versioning", True),
                 private_includes = private_includes,
-                foreign_types = qml_args.get("foreign_types", []),
+                foreign_types = foreign_types,
                 generate_jsroot = qml_args.get("generate_jsroot", False),
                 tags = tags,
                 **common_kwargs
             )
             extra_srcs.append(":" + typereg_target)
+
+            import_tree_srcs = [":" + typereg_target + "_qmltypes_group"]
+            native.filegroup(
+                name = typereg_target + "_qmltypes_group",
+                srcs = [":" + typereg_target],
+                output_group = "qmltypes",
+                tags = tags,
+                **common_kwargs
+            )
 
             if qmldir_content != None:
                 qmldir_rcc_target = name + "_qmldir_rcc"
@@ -213,7 +305,25 @@ def qt_internal_library(
                     tags = tags,
                     **common_kwargs
                 )
-                extra_srcs.append(":" + qmldir_rcc_target)
+                extra_srcs_qmldir_lib = name + "_qmldir_rcc_lib"
+                cc_library(
+                    name = extra_srcs_qmldir_lib,
+                    srcs = [":" + qmldir_rcc_target],
+                    copts = ["-fvisibility=default"],
+                    alwayslink = True,
+                    tags = tags,
+                    **common_kwargs
+                )
+                extra_deps.append(":" + extra_srcs_qmldir_lib)
+                import_tree_srcs.append(":" + qmldir_rcc_target + "_qmldir_file")
+
+            native.filegroup(
+                name = name + "_qml_import_tree",
+                srcs = import_tree_srcs,
+                visibility = visibility,
+                tags = tags,
+                **common_kwargs
+            )
 
             if "qml_files" in qml_args and qml_args["qml_files"]:
                 qmlcache_target = name + "_qmlcache"
@@ -224,6 +334,7 @@ def qt_internal_library(
                     strip_prefix = qml_args.get("qml_strip_prefix", ""),
                     qml_files = qml_args["qml_files"],
                     qmldir_content = qmldir_content or "",
+                    qmltypes = [":" + typereg_target + "_qmltypes_group"],
                     tags = tags,
                     **common_kwargs
                 )
@@ -257,23 +368,42 @@ def qt_internal_library(
     if create_shared:
         shared_dyn_deps = list(dynamic_deps) if type(dynamic_deps) == type([]) else dynamic_deps
         if type(shared_dyn_deps) == type([]):
-            if (":quick_shared" in shared_dyn_deps or "@qtdeclarative//:quick_shared" in shared_dyn_deps) and "@qtbase//:opengl_shared" not in shared_dyn_deps and ":opengl_shared" not in shared_dyn_deps:
-                shared_dyn_deps.append("@qtbase//:opengl_shared")
-            if "@qtbase//:dbus_shared" in shared_dyn_deps or "@qtbase//:gui_shared" in shared_dyn_deps:
-                shared_dyn_deps = [d for d in shared_dyn_deps if d != "@qtbase//:dbus_shared"] + select({
+            if (":quick_shared" in shared_dyn_deps or "@qtdeclarative//:quick_shared" in shared_dyn_deps or Label("@qtdeclarative//:quick_shared") in shared_dyn_deps) and "@qtbase//:opengl_shared" not in shared_dyn_deps and Label("@qtbase//:opengl_shared") not in shared_dyn_deps and ":opengl_shared" not in shared_dyn_deps:
+                shared_dyn_deps.append(Label("@qtbase//:opengl_shared"))
+            if "@qtbase//:dbus_shared" in shared_dyn_deps or Label("@qtbase//:dbus_shared") in shared_dyn_deps or "@qtbase//:gui_shared" in shared_dyn_deps or Label("@qtbase//:gui_shared") in shared_dyn_deps:
+                shared_dyn_deps = [d for d in shared_dyn_deps if d != "@qtbase//:dbus_shared" and d != Label("@qtbase//:dbus_shared")] + select({
                     Label("@platforms//os:windows"): [],
-                    "//conditions:default": ["@qtbase//:dbus_shared"],
+                    "//conditions:default": [Label("@qtbase//:dbus_shared")],
                 })
+        shared_roots = [":" + name]
+        if type(exports_filter) == type([]) and ("@glib//glib:glib" in exports_filter):
+            shared_roots = shared_roots + select({
+                Label("@platforms//os:linux"): ["@glib//glib:glib"],
+                "//conditions:default": [],
+            })
+        version_script = Label("//:qt6_version_script")
         cc_shared_library(
             name = name + "_shared",
             shared_lib_name = select({
                 Label("@platforms//os:windows"): "lib" + name + "_shared.dll",
                 "//conditions:default": "",
             }),
-            deps = [":" + name],
+            deps = shared_roots,
             dynamic_deps = shared_dyn_deps,
             exports_filter = exports_filter,
-            user_link_flags = linkopts + QT_SHARED_PLATFORM_LINKOPTS,
+            additional_linker_inputs = select({
+                Label("@platforms//os:linux"): [version_script],
+                "//conditions:default": [],
+            }),
+            user_link_flags = linkopts + QT_SHARED_PLATFORM_LINKOPTS + select({
+                # F-ABI-3 / F-ABI-4: upstream links Qt libraries with
+                # -Bsymbolic-functions and tags every exported symbol Qt_6.
+                Label("@platforms//os:linux"): [
+                    "-Wl,-Bsymbolic-functions",
+                    "-Wl,--version-script=$(execpath %s)" % str(version_script),
+                ],
+                "//conditions:default": [],
+            }),
             visibility = visibility,
             tags = tags,
             **common_kwargs
@@ -301,6 +431,7 @@ def qt_static_plugin(
         moc_unity = False,
         applicable_licenses = None,
         target_compatible_with = None,
+        testonly = None,
         visibility = None,
         tags = []):
     """Builds a Qt plugin as a statically linked Q_IMPORT_PLUGIN library.
@@ -329,6 +460,7 @@ def qt_static_plugin(
       moc_unity: See `qt_internal_library`.
       applicable_licenses: Optional license labels forwarded to `cc_library`.
       target_compatible_with: Optional platform compatibility constraints.
+      testonly: Optional testonly flag forwarded to generated targets.
       visibility: Forwarded to generated targets.
       tags: Forwarded to generated targets.
 
@@ -341,6 +473,8 @@ def qt_static_plugin(
     common_kwargs = {}
     if target_compatible_with != None:
         common_kwargs["target_compatible_with"] = target_compatible_with
+    if testonly != None:
+        common_kwargs["testonly"] = testonly
 
     json_globs = []
     seen_dirs = {}
@@ -382,6 +516,7 @@ def qt_static_plugin(
         moc_unity = moc_unity,
         applicable_licenses = applicable_licenses,
         target_compatible_with = target_compatible_with,
+        testonly = testonly,
         visibility = visibility,
         tags = tags,
     )

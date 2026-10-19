@@ -143,9 +143,9 @@ def qt_wayland_client_protocol(
         **kwargs):
     """Generates Wayland client protocol headers and C/C++ sources, plus `<name>_hdrs` and `<name>_srcs` filegroups."""
     if wayland_scanner_tool == None:
-        wayland_scanner_tool = native.package_relative_label("@wayland//:wayland_scanner")
+        wayland_scanner_tool = "@wayland//:wayland_scanner"
     if qtwaylandscanner_tool == None:
-        qtwaylandscanner_tool = native.package_relative_label("@qtbase//:qtwaylandscanner")
+        qtwaylandscanner_tool = Label("@qtbase//:qtwaylandscanner")
     _qt_wayland_protocol_rule(
         name = name,
         protocols = protocols,
@@ -163,12 +163,14 @@ def qt_wayland_client_protocol(
         srcs = [":" + name],
         output_group = "hdrs",
         target_compatible_with = target_compatible_with,
+        testonly = kwargs.get("testonly"),
     )
     native.filegroup(
         name = name + "_srcs",
         srcs = [":" + name],
         output_group = "srcs",
         target_compatible_with = target_compatible_with,
+        testonly = kwargs.get("testonly"),
     )
 
 def qt_wayland_server_protocol(
@@ -182,9 +184,9 @@ def qt_wayland_server_protocol(
         **kwargs):
     """Generates Wayland server protocol headers and C/C++ sources, plus `<name>_hdrs` and `<name>_srcs` filegroups."""
     if wayland_scanner_tool == None:
-        wayland_scanner_tool = native.package_relative_label("@wayland//:wayland_scanner")
+        wayland_scanner_tool = "@wayland//:wayland_scanner"
     if qtwaylandscanner_tool == None:
-        qtwaylandscanner_tool = native.package_relative_label("@qtbase//:qtwaylandscanner")
+        qtwaylandscanner_tool = Label("@qtbase//:qtwaylandscanner")
     _qt_wayland_protocol_rule(
         name = name,
         protocols = protocols,
@@ -201,10 +203,12 @@ def qt_wayland_server_protocol(
         srcs = [":" + name],
         output_group = "hdrs",
         target_compatible_with = target_compatible_with,
+        testonly = kwargs.get("testonly"),
     )
     native.filegroup(
         name = name + "_srcs",
         srcs = [":" + name],
         output_group = "srcs",
         target_compatible_with = target_compatible_with,
+        testonly = kwargs.get("testonly"),
     )

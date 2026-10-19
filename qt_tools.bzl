@@ -217,14 +217,17 @@ mv "{out}.tmp" "{out}"
             content = rsp,
         )
 
+        has_muri = any([a.startswith("-Muri=") for a in extra_args])
         ctx.actions.run_shell(
             tools = [moc],
             inputs = depset(direct = [rsp_file], transitive = [all_inputs]),
             outputs = [out_file, json_file],
-            command = 'touch "{out}" && "{moc}" "@{rsp}"'.format(
+            command = 'touch "{out}" && URI_ARG=""; if [ "{has_muri}" = "False" ]; then URI_VAL=$(sed -n "s|^// QT_MOC_URI: ||p" "{src}"); if [ -n "$URI_VAL" ]; then URI_ARG="-Muri=$URI_VAL"; fi; fi; "{moc}" $URI_ARG "@{rsp}"'.format(
                 out = out_file.path,
                 moc = moc.path,
                 rsp = rsp_file.path,
+                src = src.path,
+                has_muri = "True" if has_muri else "False",
             ),
             mnemonic = "QtMocSrc",
             progress_message = "Running moc on source %s" % src.short_path,
@@ -384,7 +387,7 @@ _MOC_PLATFORM_DEFINES = select({
 
 def moc_gen(moc_tool = None, defines = [], **kwargs):
     if moc_tool == None:
-        moc_tool = native.package_relative_label("@qtbase//:moc")
+        moc_tool = Label("@qtbase//:moc")
     _moc_gen_rule(moc_tool = moc_tool, defines = defines + _MOC_PLATFORM_DEFINES, **kwargs)
 
 def _qt_sync_headers_impl(ctx):
@@ -424,6 +427,9 @@ def _qt_sync_headers_impl(ctx):
                 cmds.append('mkdir -p "{sub}" && cp -f "{src}" "{sub}/"'.format(src = f.path, sub = sub_dir))
         if f.basename == "qconfig.h":
             cmds.append('printf \'#include "qconfig.h" // IWYU pragma: export\\n\' > "{dst}/QtConfig"'.format(dst = pub_out))
+        if f.basename == "qvulkanfunctions.h":
+            cmds.append('printf \'#include "qvulkanfunctions.h" // IWYU pragma: export\\n\' > "{dst}/QVulkanFunctions"'.format(dst = pub_out))
+            cmds.append('printf \'#include "qvulkanfunctions.h" // IWYU pragma: export\\n\' > "{dst}/QVulkanDeviceFunctions"'.format(dst = pub_out))
 
     for f in ctx.files.generated_private_hdrs:
         cmds.append('cp -f "{src}" "{dst}/"'.format(src = f.path, dst = priv_out))
@@ -458,7 +464,7 @@ def _qt_sync_headers_impl(ctx):
         if ctx.attr.rhi_filter:
             syncqt_cmd.append('-rhiHeadersFilter "{rf}"'.format(rf = ctx.attr.rhi_filter))
         if ctx.attr.ssg_filter:
-            syncqt_cmd.append('-ssgHeadersFilter "{sf}"'.format(sf = ctx.attr.ssg_filter))
+            syncqt_cmd.append('-ssgIncludeDirFilter "{sf}"'.format(sf = ctx.attr.ssg_filter) if False else '-ssgHeadersFilter "{sf}"'.format(sf = ctx.attr.ssg_filter))
         ns_filter = ctx.attr.public_namespace_filter
         if not ns_filter and mod.startswith("Qt3D"):
             ns_filter = "^::Qt3D.*"
@@ -578,7 +584,7 @@ def qt_sync_headers(
       **kwargs: Forwarded to `_qt_sync_headers_rule`.
     """
     if syncqt_tool == None:
-        syncqt_tool = native.package_relative_label("@qtbase//:syncqt")
+        syncqt_tool = Label("@qtbase//:syncqt")
     if hdrs == None and srcs != None:
         hdrs = srcs
     if source_dir == None:
@@ -595,6 +601,7 @@ def qt_sync_headers(
             out = name + "_gen/" + module_name + "Depends",
             dep_modules = dep_modules or [],
             target_compatible_with = kwargs.get("target_compatible_with"),
+            testonly = kwargs.get("testonly"),
         )
         pub_hdrs.append(":" + depends_target)
     _qt_sync_headers_rule(
@@ -628,10 +635,48 @@ _EXPORT_HEADER_TEMPLATE = """// Copyright (C) 2022 The Qt Company Ltd.
 #  define Q_{infix}_EXPORT
 #endif
 
-#define QT_{infix}_INLINE_SINCE(major, minor) inline
-#define QT_{infix}_CONSTEXPR_INLINE_SINCE(major, minor) constexpr
-#define QT_{infix}_INLINE_IMPL_SINCE(major, minor) 1
-#define QT_{infix}_REMOVED_SINCE(major, minor) 0
+#if defined(_WIN32)
+/* Windows (Bazel build): the same Qt objects are linked both into the DLLs
+ * and statically into tools/tests. On COFF an inline (COMDAT) copy from a
+ * consumer plus removed_api.cpp's out-of-line definition is a duplicate
+ * symbol, so always inline and don't export removed APIs (no binary
+ * compatibility with official Qt builds for removed API on Windows). */
+#  define QT_{infix}_INLINE_SINCE(major, minor) inline
+#  define QT_{infix}_CONSTEXPR_INLINE_SINCE(major, minor) constexpr
+#  define QT_{infix}_INLINE_IMPL_SINCE(major, minor) 1
+#elif !defined(QT_BUILD_{infix}_LIB) && !defined(QT_STATIC)
+/* outside library -> inline decl + defi */
+/* static builds treat everything as part of the library, so they never inline */
+#  define QT_{infix}_INLINE_SINCE(major, minor) inline
+#  define QT_{infix}_CONSTEXPR_INLINE_SINCE(major, minor) constexpr
+#  define QT_{infix}_INLINE_IMPL_SINCE(major, minor) 1
+#elif defined(QT_{infix}_BUILD_REMOVED_API)
+/* inside library, inside removed_api.cpp:
+ * keep deprecated API -> non-inline decl;
+ * remove deprecated API -> inline decl;
+ * definition is always available */
+#  define QT_{infix}_INLINE_SINCE(major, minor) \\
+    QT_IF_DEPRECATED_SINCE(major, minor, inline, /* not inline */)
+#  define QT_{infix}_CONSTEXPR_INLINE_SINCE(major, minor) \\
+    QT_IF_DEPRECATED_SINCE(major, minor, constexpr, /* not inline */)
+#  define QT_{infix}_INLINE_IMPL_SINCE(major, minor) 1
+#else
+/* inside library, outside removed_api.cpp:
+ * keep deprecated API -> non-inline decl, no defi;
+ * remove deprecated API -> inline decl, defi */
+#  define QT_{infix}_INLINE_SINCE(major, minor) \\
+    QT_IF_DEPRECATED_SINCE(major, minor, inline, /* not inline */)
+#  define QT_{infix}_CONSTEXPR_INLINE_SINCE(major, minor) \\
+    QT_IF_DEPRECATED_SINCE(major, minor, constexpr, /* not inline */)
+#  define QT_{infix}_INLINE_IMPL_SINCE(major, minor) \\
+    QT_IF_DEPRECATED_SINCE(major, minor, 1, 0)
+#endif
+
+#if defined(QT_{infix}_BUILD_REMOVED_API) && !defined(_WIN32)
+#  define QT_{infix}_REMOVED_SINCE(major, minor) QT_DEPRECATED_SINCE(major, minor)
+#else
+#  define QT_{infix}_REMOVED_SINCE(major, minor) 0
+#endif
 
 #endif // {guard}
 """
@@ -778,7 +823,7 @@ _qt_rcc_internal_rule = rule(
 
 def qt_rcc_internal(rcc_tool = None, **kwargs):
     if rcc_tool == None:
-        rcc_tool = native.package_relative_label("@qtbase//:rcc")
+        rcc_tool = Label("@qtbase//:rcc")
     _qt_rcc_internal_rule(rcc_tool = rcc_tool, **kwargs)
 
 def _qt_lalr_impl(ctx):
@@ -827,7 +872,7 @@ _qt_lalr_rule = rule(
 
 def qt_lalr(qlalr_tool = None, **kwargs):
     if qlalr_tool == None:
-        qlalr_tool = native.package_relative_label("@qtbase//:qlalr")
+        qlalr_tool = Label("@qtbase//:qlalr")
     _qt_lalr_rule(qlalr_tool = qlalr_tool, **kwargs)
 
 def _qt_qml_type_registration_impl(ctx):
@@ -835,7 +880,8 @@ def _qt_qml_type_registration_impl(ctx):
     metatypes_json = ctx.attr.metatypes[QtMetaTypesInfo].direct_json
 
     out_cpp = ctx.actions.declare_file(ctx.label.name + "_qmltyperegistrations.cpp")
-    out_qmltypes = ctx.actions.declare_file(ctx.label.name + "_qmltypes/plugins.qmltypes")
+    uri_path = ctx.attr.import_name.replace(".", "/")
+    out_qmltypes = ctx.actions.declare_file(ctx.label.name + "_qmltypes/qml/" + uri_path + "/plugins.qmltypes")
 
     foreign_jsons = []
     for fTarget in ctx.attr.foreign_types:
@@ -863,7 +909,7 @@ def _qt_qml_type_registration_impl(ctx):
 
     outs = [out_cpp, out_qmltypes]
     if ctx.attr.generate_jsroot:
-        jsroot_qmltypes = ctx.actions.declare_file(ctx.label.name + "_qmltypes/jsroot.qmltypes")
+        jsroot_qmltypes = ctx.actions.declare_file(ctx.label.name + "_qmltypes/qml/" + uri_path + "/jsroot.qmltypes")
         js_args = ctx.actions.args()
         js_args.add("--jsroot")
         js_args.add("--generate-qmltypes", jsroot_qmltypes.path)
@@ -892,6 +938,7 @@ def _qt_qml_type_registration_impl(ctx):
         DefaultInfo(files = depset([out_cpp])),
         OutputGroupInfo(
             qmltypes = depset(outs[1:]),
+            qml_import_tree = depset(outs[1:]),
             all_files = depset(outs),
         ),
     ]
@@ -918,7 +965,7 @@ _qt_qml_type_registration_rule = rule(
 
 def qt_qml_type_registration(qmltyperegistrar_tool = None, **kwargs):
     if qmltyperegistrar_tool == None:
-        qmltyperegistrar_tool = native.package_relative_label("@qtdeclarative//:qmltyperegistrar")
+        qmltyperegistrar_tool = Label("@qtdeclarative//:qmltyperegistrar")
     _qt_qml_type_registration_rule(qmltyperegistrar_tool = qmltyperegistrar_tool, **kwargs)
 
 def _qt_write_file_impl(ctx):
@@ -954,12 +1001,96 @@ qt_write_file = rule(
     provides = [CcInfo],
 )
 
+def qt_generate_qmldir_content(
+        uri,
+        major_version = "6",
+        minor_version = "10",
+        past_major_versions = [],
+        linktarget = None,
+        plugin_target = None,
+        class_name = None,
+        plugin_optional = True,
+        typeinfo = "plugins.qmltypes",
+        designer_supported = False,
+        default_imports = [],
+        imports = [],
+        optional_imports = [],
+        depends = [],
+        prefer = None,
+        qml_files = [],
+        strip_prefix = "",
+        qml_singletons = [],
+        qml_internal_files = [],
+        qml_source_versions = {}):
+    """Generates the text content of a Qt QML module's qmldir file from metadata."""
+    uri_path = uri.replace(".", "/")
+    if linktarget == None and plugin_target:
+        linktarget = "Qt6::" + plugin_target
+    qmldir_lines = ["module " + uri]
+    if linktarget:
+        qmldir_lines.append("linktarget " + linktarget)
+    if plugin_target:
+        qmldir_lines.append(("optional plugin " if plugin_optional else "plugin ") + plugin_target)
+    if class_name:
+        qmldir_lines.append("classname " + class_name)
+    if designer_supported:
+        qmldir_lines.append("designersupported")
+    if typeinfo:
+        qmldir_lines.append("typeinfo " + typeinfo)
+    for def_imp in default_imports:
+        qmldir_lines.append("default import " + def_imp)
+    for imp_uri in imports:
+        qmldir_lines.append("import " + imp_uri)
+    for opt_imp in optional_imports:
+        qmldir_lines.append("optional import " + opt_imp)
+    for dep_uri in depends:
+        qmldir_lines.append("depends " + dep_uri)
+    prefer_path = prefer if prefer != None else (":/qt-project.org/imports/" + uri_path + "/")
+    if prefer_path:
+        qmldir_lines.append("prefer " + prefer_path)
+
+    sp = strip_prefix
+    if sp and not sp.endswith("/"):
+        sp = sp + "/"
+    singleton_set = {s: True for s in qml_singletons}
+    internal_set = {s: True for s in qml_internal_files}
+    if type(qml_files) == type([]):
+        for qf in qml_files:
+            if type(qf) != type("") or not qf.endswith(".qml"):
+                continue
+            rel = qf[len(sp):] if (sp and qf.startswith(sp)) else qf
+            if rel.startswith("+") or "/+" in rel:
+                continue
+            base = rel.rsplit("/", 1)[-1]
+            type_name = base[:-4]
+            if not type_name or not (type_name[0] >= "A" and type_name[0] <= "Z"):
+                continue
+            is_internal = (qf in internal_set) or (rel in internal_set) or (type_name in internal_set)
+            is_singleton = (qf in singleton_set) or (rel in singleton_set) or (type_name in singleton_set)
+            if is_internal:
+                qmldir_lines.append("internal " + type_name + " " + rel)
+            else:
+                prefix_str = "singleton " if is_singleton else ""
+                custom_vers = qml_source_versions.get(rel, qml_source_versions.get(base, qml_source_versions.get(type_name, None)))
+                if custom_vers != None:
+                    for ver in custom_vers:
+                        qmldir_lines.append(prefix_str + type_name + " " + str(ver) + " " + rel)
+                else:
+                    qmldir_lines.append(prefix_str + type_name + " " + str(major_version) + "." + str(minor_version) + " " + rel)
+                    if str(minor_version) != "0":
+                        qmldir_lines.append(prefix_str + type_name + " " + str(major_version) + ".0 " + rel)
+                    for pmv in past_major_versions:
+                        qmldir_lines.append(prefix_str + type_name + " " + str(pmv) + ".0 " + rel)
+
+    return "\n".join(qmldir_lines) + "\n"
+
 def qt_qmldir(
         name,
         uri,
         content,
         rcc_tool = None,
-        tags = []):
+        tags = [],
+        **kwargs):
     """Writes a qmldir file for `uri` and embeds it via rcc under /qt-project.org/imports/<uri_path>.
 
     Args:
@@ -968,16 +1099,18 @@ def qt_qmldir(
       content: Text content of the qmldir file.
       rcc_tool: Optional rcc binary label.
       tags: Optional Bazel tags.
+      **kwargs: Additional rule kwargs (e.g. target_compatible_with, testonly).
     """
     uri_path = uri.replace(".", "/")
     qrc_name = "qmake_" + uri.replace(".", "_")
     qmldir_target = name + "_qmldir_file"
-    qmldir_out = name + "_qmldir/qmldir"
+    qmldir_out = name + "_qmldir/qml/" + uri_path + "/qmldir"
     qt_write_file(
         name = qmldir_target,
         out = qmldir_out,
         content = content,
         tags = tags,
+        **kwargs
     )
     qrc_target = name + "_qmldir_qrc"
     qt_generate_qrc(
@@ -986,6 +1119,7 @@ def qt_qmldir(
         prefix = "/qt-project.org/imports/" + uri_path,
         srcs = [":" + qmldir_target],
         tags = tags,
+        **kwargs
     )
     qt_rcc_internal(
         name = name,
@@ -994,9 +1128,11 @@ def qt_qmldir(
         data = [":" + qmldir_target],
         rcc_tool = rcc_tool,
         tags = tags,
+        **kwargs
     )
 
-_QML_PLUGIN_TEMPLATE = """// This file is autogenerated by Bazel. Do not edit.
+_QML_PLUGIN_TEMPLATE = """// QT_MOC_URI: {uri}
+// This file is autogenerated by Bazel. Do not edit.
 
 #include <QtCore/qtsymbolmacros.h>
 #include <QtQml/qqmlextensionplugin.h>
@@ -1035,6 +1171,7 @@ def _qt_qml_plugin_gen_impl(ctx):
         escaped_uri = escaped_uri,
         qrc_name = qrc_name,
         stem = stem,
+        uri = ctx.attr.uri,
     )
     ctx.actions.write(out, content)
     return [DefaultInfo(files = depset([out]))]
@@ -1048,10 +1185,13 @@ qt_qml_plugin_gen = rule(
     },
 )
 
-_QML_PLUGIN_CPP_TEMPLATE = """// This file is autogenerated by Bazel. Do not edit.
+_QML_PLUGIN_CPP_TEMPLATE = """// QT_MOC_URI: {uri}
+// This file is autogenerated by Bazel. Do not edit.
 
 #include <QtCore/qtsymbolmacros.h>
 #include <QtQml/qqmlextensionplugin.h>
+
+{reg_decl}
 
 class {class_name} : public QQmlEngineExtensionPlugin
 {{
@@ -1061,6 +1201,7 @@ class {class_name} : public QQmlEngineExtensionPlugin
 public:
     {class_name}(QObject *parent = nullptr) : QQmlEngineExtensionPlugin(parent)
     {{
+        {reg_keep}
     }}
 }};
 
@@ -1072,9 +1213,19 @@ def _qt_qml_plugin_cpp_impl(ctx):
     stem = out.basename
     if stem.endswith(".cpp"):
         stem = stem[:-4]
+    escaped_uri = (
+        ctx.attr.uri
+            .replace(".", "_")
+            .replace("-", "_")
+            .replace("/", "_")
+    )
+    reg_func = ctx.attr.registration_func if ctx.attr.registration_func else ("qml_register_types_" + escaped_uri)
     content = _QML_PLUGIN_CPP_TEMPLATE.format(
         class_name = ctx.attr.plugin_class_name,
+        reg_decl = "QT_DECLARE_EXTERN_SYMBOL_VOID(%s)" % reg_func,
+        reg_keep = "QT_KEEP_SYMBOL(%s)" % reg_func,
         stem = stem,
+        uri = ctx.attr.uri,
     )
     ctx.actions.write(out, content)
     return [DefaultInfo(files = depset([out]))]
@@ -1111,9 +1262,12 @@ def _qt_qsb_gen_impl(ctx):
 
         out_file = ctx.actions.declare_file(ctx.label.name + "_qsb/" + rel_out)
         args = ctx.actions.args()
-        args.add("--glsl", ctx.attr.glsl)
-        args.add("--hlsl", ctx.attr.hlsl)
-        args.add("--msl", ctx.attr.msl)
+        if ctx.attr.glsl:
+            args.add("--glsl", ctx.attr.glsl)
+        if ctx.attr.hlsl:
+            args.add("--hlsl", ctx.attr.hlsl)
+        if ctx.attr.msl:
+            args.add("--msl", ctx.attr.msl)
         if ctx.attr.batchable:
             args.add("-b")
         if ctx.attr.optimized:
@@ -1211,7 +1365,7 @@ def _qt_qsb_gen_impl(ctx):
         arguments = [rcc_args],
         env = _tool_env(rcc, {"QT_RCC_SOURCE_DATE_OVERRIDE": "1"}),
         mnemonic = "QtRccShaders",
-        progress_message = "Embedding compiled shaders for %s" % ctx.label.name,
+        progress_message = "Embedding compiled shaders for %s" % ctx.attr.name,
     )
 
     return [
@@ -1261,9 +1415,9 @@ def qt_qsb(qsb_tool = None, rcc_tool = None, **kwargs):
       **kwargs: Additional arguments forwarded to _qt_qsb_rule.
     """
     if qsb_tool == None:
-        qsb_tool = native.package_relative_label("@qtshadertools//:qsb")
+        qsb_tool = Label("@qtshadertools//:qsb")
     if rcc_tool == None:
-        rcc_tool = native.package_relative_label("@qtbase//:rcc")
+        rcc_tool = Label("@qtbase//:rcc")
     _qt_qsb_rule(qsb_tool = qsb_tool, rcc_tool = rcc_tool, **kwargs)
 
 def _qt_qml_cachegen_impl(ctx):
@@ -1278,69 +1432,16 @@ def _qt_qml_cachegen_impl(ctx):
     qmldir_file = ctx.actions.declare_file(ctx.label.name + "_qmldir/" + uri_path + "/qmldir")
     ctx.actions.write(qmldir_file, ctx.attr.qmldir_content)
 
-    cpp_outs = []
-    resource_paths = []
     rel_paths = []
-
+    resource_paths = []
     for src in ctx.files.qml_files:
         rel = _repo_rel_path(src)
         if strip_prefix and rel.startswith(strip_prefix):
             rel = rel[len(strip_prefix):]
         rel_paths.append(rel)
-        res_path = prefix + "/" + rel
-        resource_paths.append(res_path)
+        resource_paths.append(prefix + "/" + rel)
 
-        safe_name = (
-            rel.replace("/", "_")
-                .replace(".qml", "_qml")
-                .replace(".js", "_js")
-                .replace(".mjs", "_mjs")
-                .replace("+", "_")
-        )
-        out_cpp = ctx.actions.declare_file(
-            ctx.label.name + "_qmlcache/" + ctx.attr.target_name + "_" + safe_name + ".cpp",
-        )
-
-        args = ctx.actions.args()
-        args.add("--bare")
-        args.add("--resource-path", res_path)
-        args.add("-i", qmldir_file.path)
-        args.add("-o", out_cpp.path)
-        args.add(src.path)
-
-        ctx.actions.run(
-            executable = qmlcachegen,
-            inputs = [src, qmldir_file] + ctx.files.qmltypes,
-            outputs = [out_cpp],
-            arguments = [args],
-            env = _tool_env(qmlcachegen),
-            mnemonic = "QtQmlCacheGen",
-            progress_message = "Compiling QML %s" % src.short_path,
-        )
-        cpp_outs.append(out_cpp)
-
-    # Generate loader C++ file
-    rsp_file = ctx.actions.declare_file(ctx.label.name + "_loader.rsp")
-    ctx.actions.write(rsp_file, "\n".join(resource_paths) + "\n")
-    loader_cpp = ctx.actions.declare_file(
-        ctx.label.name + "_qmlcache/" + ctx.attr.target_name + "_qmlcache_loader.cpp",
-    )
-    loader_args = ctx.actions.args()
-    loader_args.add("--resource-name", "qmlcache_" + ctx.attr.target_name)
-    loader_args.add("-o", loader_cpp.path)
-    loader_args.add("@" + rsp_file.path)
-    ctx.actions.run(
-        executable = qmlcachegen,
-        inputs = [rsp_file],
-        outputs = [loader_cpp],
-        arguments = [loader_args],
-        env = _tool_env(qmlcachegen),
-        mnemonic = "QtQmlCacheLoader",
-        progress_message = "Generating QML cache loader for %s" % ctx.attr.target_name,
-    )
-    cpp_outs.append(loader_cpp)
-
-    # Embed raw .qml files via rcc
+    # Declare raw .qml .qrc first so we can pass `--resource <qrc>` to qmlcachegen
     qrc_out = ctx.actions.declare_file(ctx.label.name + "_raw_qml.qrc")
     out_dir_parts = [p for p in qrc_out.dirname.split("/") if p]
     up_prefix = "../" * len(out_dir_parts)
@@ -1359,6 +1460,60 @@ def _qt_qml_cachegen_impl(ctx):
         "",
     ])
     ctx.actions.write(qrc_out, "\n".join(lines))
+
+    cpp_outs = []
+    for src, rel, res_path in zip(ctx.files.qml_files, rel_paths, resource_paths):
+        safe_name = (
+            rel.replace("/", "_")
+                .replace(".qml", "_qml")
+                .replace(".js", "_js")
+                .replace(".mjs", "_mjs")
+                .replace("+", "_")
+        )
+        out_cpp = ctx.actions.declare_file(
+            ctx.label.name + "_qmlcache/" + ctx.attr.target_name + "_" + safe_name + ".cpp",
+        )
+
+        args = ctx.actions.args()
+        args.add("--bare")
+        args.add("--resource-path", res_path)
+        args.add("--resource", qrc_out.path)
+        args.add("-i", qmldir_file.path)
+        args.add("-o", out_cpp.path)
+        args.add(src.path)
+
+        ctx.actions.run(
+            executable = qmlcachegen,
+            inputs = [src, qmldir_file, qrc_out] + ctx.files.qml_files + ctx.files.qmltypes,
+            outputs = [out_cpp],
+            arguments = [args],
+            env = _tool_env(qmlcachegen),
+            mnemonic = "QtQmlCacheGen",
+            progress_message = "Compiling QML %s" % src.short_path,
+        )
+        cpp_outs.append(out_cpp)
+
+    # Generate loader C++ file
+    rsp_file = ctx.actions.declare_file(ctx.label.name + "_loader.rsp")
+    ctx.actions.write(rsp_file, "\n".join(resource_paths) + "\n")
+    loader_cpp = ctx.actions.declare_file(
+        ctx.label.name + "_qmlcache/" + ctx.attr.target_name + "_qmlcache_loader.cpp",
+    )
+    loader_args = ctx.actions.args()
+    loader_args.add("--resource-name", "qmlcache_" + ctx.attr.target_name)
+    loader_args.add("--resource", qrc_out.path)
+    loader_args.add("-o", loader_cpp.path)
+    loader_args.add("@" + rsp_file.path)
+    ctx.actions.run(
+        executable = qmlcachegen,
+        inputs = [rsp_file, qrc_out],
+        outputs = [loader_cpp],
+        arguments = [loader_args],
+        env = _tool_env(qmlcachegen),
+        mnemonic = "QtQmlCacheLoader",
+        progress_message = "Generating QML cache loader for %s" % ctx.attr.target_name,
+    )
+    cpp_outs.append(loader_cpp)
 
     raw_qrc_cpp = ctx.actions.declare_file("qrc_" + ctx.attr.target_name + "_raw_qml_0.cpp")
     rcc_args = ctx.actions.args()
@@ -1409,9 +1564,9 @@ def qt_qml_cachegen(qmlcachegen_tool = None, rcc_tool = None, **kwargs):
       **kwargs: Additional arguments forwarded to _qt_qml_cachegen_rule.
     """
     if qmlcachegen_tool == None:
-        qmlcachegen_tool = native.package_relative_label("@qtdeclarative//:qmlcachegen")
+        qmlcachegen_tool = Label("@qtdeclarative//:qmlcachegen")
     if rcc_tool == None:
-        rcc_tool = native.package_relative_label("@qtbase//:rcc")
+        rcc_tool = Label("@qtbase//:rcc")
     _qt_qml_cachegen_rule(qmlcachegen_tool = qmlcachegen_tool, rcc_tool = rcc_tool, **kwargs)
 
 def _qt_dbus_interface_impl(ctx):
@@ -1493,7 +1648,7 @@ def qt_dbus_interface(qdbusxml2cpp_tool = None, **kwargs):
       **kwargs: Additional arguments forwarded to _qt_dbus_interface_rule.
     """
     if qdbusxml2cpp_tool == None:
-        qdbusxml2cpp_tool = native.package_relative_label("@qtbase//:qdbusxml2cpp")
+        qdbusxml2cpp_tool = Label("@qtbase//:qdbusxml2cpp")
     _qt_dbus_interface_rule(qdbusxml2cpp_tool = qdbusxml2cpp_tool, **kwargs)
 
 def _qt_rep_impl(ctx):
@@ -1554,7 +1709,7 @@ def qt_rep(repc_tool = None, **kwargs):
       **kwargs: Additional arguments forwarded to _qt_rep_rule.
     """
     if repc_tool == None:
-        repc_tool = native.package_relative_label("@qtremoteobjects//:repc")
+        repc_tool = Label("@qtremoteobjects//:repc")
     _qt_rep_rule(repc_tool = repc_tool, **kwargs)
 
 def _qt_scxml_impl(ctx):
@@ -1621,7 +1776,7 @@ def qt_scxml(qscxmlc_tool = None, **kwargs):
       **kwargs: Additional arguments forwarded to _qt_scxml_rule.
     """
     if qscxmlc_tool == None:
-        qscxmlc_tool = native.package_relative_label("@qtscxml//:qscxmlc")
+        qscxmlc_tool = Label("@qtscxml//:qscxmlc")
     _qt_scxml_rule(qscxmlc_tool = qscxmlc_tool, **kwargs)
 
 def _qt_translation_impl(ctx):
@@ -1668,7 +1823,7 @@ def qt_translation(lrelease_tool = None, srcs = None, ts_files = None, **kwargs)
       **kwargs: Additional arguments forwarded to _qt_translation_rule.
     """
     if lrelease_tool == None:
-        lrelease_tool = native.package_relative_label("@qttools//:lrelease")
+        lrelease_tool = Label("@qttools//:lrelease")
     _qt_translation_rule(
         lrelease_tool = lrelease_tool,
         srcs = srcs if srcs != None else ts_files,
