@@ -838,8 +838,9 @@ def _qt_lalr_impl(ctx):
 
     flags = " ".join(['"{}"'.format(f) for f in ctx.attr.flags])
     cmd = """set -e
-TOOL=$(realpath "{qlalr}")
-GRAMMAR=$(realpath "{grammar}")
+EXECROOT="$PWD"
+TOOL="$EXECROOT/{qlalr}"
+GRAMMAR="$EXECROOT/{grammar}"
 cd "{out_dir}"
 "$TOOL" {flags} "$GRAMMAR"
 """.format(
@@ -969,7 +970,7 @@ _qt_qml_type_registration_rule = rule(
 
 def qt_qml_type_registration(qmltyperegistrar_tool = None, **kwargs):
     if qmltyperegistrar_tool == None:
-        qmltyperegistrar_tool = Label("@qtdeclarative//:qmltyperegistrar")
+        qmltyperegistrar_tool = "@qtdeclarative//:qmltyperegistrar"
     _qt_qml_type_registration_rule(qmltyperegistrar_tool = qmltyperegistrar_tool, **kwargs)
 
 def _qt_write_file_impl(ctx):
@@ -1419,7 +1420,7 @@ def qt_qsb(qsb_tool = None, rcc_tool = None, **kwargs):
       **kwargs: Additional arguments forwarded to _qt_qsb_rule.
     """
     if qsb_tool == None:
-        qsb_tool = Label("@qtshadertools//:qsb")
+        qsb_tool = "@qtshadertools//:qsb"
     if rcc_tool == None:
         rcc_tool = Label("@qtbase//:rcc")
     _qt_qsb_rule(qsb_tool = qsb_tool, rcc_tool = rcc_tool, **kwargs)
@@ -1568,7 +1569,7 @@ def qt_qml_cachegen(qmlcachegen_tool = None, rcc_tool = None, **kwargs):
       **kwargs: Additional arguments forwarded to _qt_qml_cachegen_rule.
     """
     if qmlcachegen_tool == None:
-        qmlcachegen_tool = Label("@qtdeclarative//:qmlcachegen")
+        qmlcachegen_tool = "@qtdeclarative//:qmlcachegen"
     if rcc_tool == None:
         rcc_tool = Label("@qtbase//:rcc")
     _qt_qml_cachegen_rule(qmlcachegen_tool = qmlcachegen_tool, rcc_tool = rcc_tool, **kwargs)
@@ -1590,8 +1591,9 @@ def _qt_dbus_interface_impl(ctx):
 
         flags_str = " ".join(['"{}"'.format(f) for f in ctx.attr.flags])
         cmd = """set -e
-TOOL=$(realpath "{tool}")
-SRC=$(realpath "{src}")
+EXECROOT="$PWD"
+TOOL="$EXECROOT/{tool}"
+SRC="$EXECROOT/{src}"
 cd "{out_dir}"
 "$TOOL" {flags} "{option}" "{base_h}:{base_cpp}" "$SRC"
 """.format(
@@ -1713,7 +1715,7 @@ def qt_rep(repc_tool = None, **kwargs):
       **kwargs: Additional arguments forwarded to _qt_rep_rule.
     """
     if repc_tool == None:
-        repc_tool = Label("@qtremoteobjects//:repc")
+        repc_tool = "@qtremoteobjects//:repc"
     _qt_rep_rule(repc_tool = repc_tool, **kwargs)
 
 def _qt_scxml_impl(ctx):
@@ -1780,7 +1782,7 @@ def qt_scxml(qscxmlc_tool = None, **kwargs):
       **kwargs: Additional arguments forwarded to _qt_scxml_rule.
     """
     if qscxmlc_tool == None:
-        qscxmlc_tool = Label("@qtscxml//:qscxmlc")
+        qscxmlc_tool = "@qtscxml//:qscxmlc"
     _qt_scxml_rule(qscxmlc_tool = qscxmlc_tool, **kwargs)
 
 def _qt_translation_impl(ctx):
@@ -1827,7 +1829,7 @@ def qt_translation(lrelease_tool = None, srcs = None, ts_files = None, **kwargs)
       **kwargs: Additional arguments forwarded to _qt_translation_rule.
     """
     if lrelease_tool == None:
-        lrelease_tool = Label("@qttools//:lrelease")
+        lrelease_tool = "@qttools//:lrelease"
     _qt_translation_rule(
         lrelease_tool = lrelease_tool,
         srcs = srcs if srcs != None else ts_files,
@@ -1878,7 +1880,7 @@ def _qt_cc_library_impl(ctx):
         name = ctx.label.name,
         cc_toolchain = cc_toolchain,
         feature_configuration = feature_configuration,
-        user_compile_flags = runtimes_copts + cc_helper.get_copts(ctx, feature_configuration, additional_make_variable_substitutions, attr = "copts", requested_features = features, disallowed_copts_infos = disallowed_copts_infos) + win_visibility_flags,
+        user_compile_flags = runtimes_copts + cc_helper.get_copts(ctx, feature_configuration, additional_make_variable_substitutions, attr = "copts", requested_features = features, disallowed_copts_infos = disallowed_copts_infos) + win_visibility_flags + ["-Wno-thread-safety-analysis"],
         conly_flags = cc_helper.get_copts(ctx, feature_configuration, additional_make_variable_substitutions, attr = "conlyopts", requested_features = features, disallowed_copts_infos = disallowed_copts_infos),
         cxx_flags = cc_helper.get_copts(ctx, feature_configuration, additional_make_variable_substitutions, attr = "cxxopts", requested_features = features, disallowed_copts_infos = disallowed_copts_infos),
         defines = cc_helper.defines(ctx, additional_make_variable_substitutions),

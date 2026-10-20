@@ -2,9 +2,14 @@
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
+load("@rules_cc//cc/common:cc_shared_library_hint_info.bzl", "CcSharedLibraryHintInfo")
+load("@rules_cc//cc/common:cc_shared_library_info.bzl", "CcSharedLibraryInfo")
 load(":qt_tools.bzl", "moc_gen", "moc_out_copts", "qt_cc_library", "qt_generate_qmldir_content", "qt_qml_cachegen", "qt_qml_type_registration", "qt_qmldir")
 
-QT_PLATFORM_COPTS = select({
+QT_PLATFORM_COPTS = [
+    "-Wno-thread-safety-analysis",
+] + select({
     Label("@platforms//os:windows"): [
         "-Wa,-mbig-obj",
         "-Wno-ignored-attributes",
@@ -37,6 +42,97 @@ QT_SHARED_PLATFORM_LINKOPTS = select({
     ],
     "//conditions:default": [],
 })
+
+QtSharedLibraryInfo = provider(
+    doc = "Carries a Qt library's cc_shared_library info, its transitive dynamic_deps, and its underlying cc_library label.",
+    fields = {
+        "dynamic_deps": "depset of struct(exports, linker_input, link_once_static_libs) in topological order.",
+        "runfiles_files": "depset of File: runtime shared library files.",
+        "qt_lib_labels": "depset of Label: underlying *_qt_lib labels exported by Qt shared libraries.",
+    },
+)
+
+def _cc_shared_lib_to_entry(dep):
+    info = dep[CcSharedLibraryInfo]
+    return struct(
+        exports = info.exports,
+        linker_input = info.linker_input,
+        link_once_static_libs = info.link_once_static_libs,
+    )
+
+def _qt_library_target_impl(ctx):
+    lib = ctx.attr.lib
+    direct_dyn = []
+    transitive_dyn = []
+    transitive_rf = []
+    direct_qt_labels = []
+    if ctx.attr.shared_lib != None:
+        direct_dyn.append(_cc_shared_lib_to_entry(ctx.attr.shared_lib))
+        transitive_dyn.append(ctx.attr.shared_lib[CcSharedLibraryInfo].dynamic_deps)
+        transitive_rf.append(ctx.attr.shared_lib[DefaultInfo].default_runfiles.files)
+        direct_qt_labels.append(lib.label)
+    for d in ctx.attr.dynamic_deps:
+        direct_dyn.append(_cc_shared_lib_to_entry(d))
+        transitive_dyn.append(d[CcSharedLibraryInfo].dynamic_deps)
+        transitive_rf.append(d[DefaultInfo].default_runfiles.files)
+
+    providers = [
+        DefaultInfo(
+            files = lib[DefaultInfo].files,
+            default_runfiles = lib[DefaultInfo].default_runfiles,
+            data_runfiles = lib[DefaultInfo].data_runfiles,
+        ),
+        lib[CcInfo],
+        CcSharedLibraryHintInfo(
+            attributes = ["lib"],
+        ),
+        QtSharedLibraryInfo(
+            dynamic_deps = depset(direct = direct_dyn, transitive = transitive_dyn, order = "topological"),
+            runfiles_files = depset(transitive = transitive_rf),
+            qt_lib_labels = depset(direct = direct_qt_labels, order = "topological"),
+        ),
+    ]
+    if OutputGroupInfo in lib:
+        providers.append(lib[OutputGroupInfo])
+    return providers
+
+_qt_library_target = rule(
+    implementation = _qt_library_target_impl,
+    attrs = {
+        "lib": attr.label(mandatory = True, providers = [CcInfo]),
+        "shared_lib": attr.label(providers = [CcSharedLibraryInfo]),
+        "dynamic_deps": attr.label_list(providers = [CcSharedLibraryInfo]),
+    },
+    provides = [CcInfo, QtSharedLibraryInfo],
+)
+
+def _qt_linkable_more_than_once_hint_impl(ctx):
+    owners = []
+    seen = {}
+    for d in ctx.attr.targets:
+        if str(d.label) not in seen:
+            seen[str(d.label)] = True
+            owners.append(d.label)
+        if CcInfo in d:
+            for li in d[CcInfo].linking_context.linker_inputs.to_list():
+                if str(li.owner) not in seen:
+                    seen[str(li.owner)] = True
+                    owners.append(li.owner)
+    return [
+        CcInfo(),
+        CcSharedLibraryHintInfo(
+            owners = owners,
+            attributes = [],
+        ),
+    ]
+
+qt_linkable_more_than_once_hint = rule(
+    implementation = _qt_linkable_more_than_once_hint_impl,
+    attrs = {
+        "targets": attr.label_list(mandatory = True),
+    },
+    provides = [CcInfo, CcSharedLibraryHintInfo],
+)
 
 def qt_internal_library(
         name,
@@ -340,11 +436,14 @@ def qt_internal_library(
                 )
                 extra_srcs.append(":" + qmlcache_target)
 
+    has_shared_info = create_shared or bool(dynamic_deps)
+    cc_lib_name = (name + "_qt_lib") if has_shared_info else name
+
     cc_lib_kwargs = dict(common_kwargs)
     if applicable_licenses != None:
         cc_lib_kwargs["applicable_licenses"] = applicable_licenses
     qt_cc_library(
-        name = name,
+        name = cc_lib_name,
         srcs = srcs + extra_srcs,
         hdrs = hdrs,
         textual_hdrs = textual_hdrs,
@@ -354,7 +453,7 @@ def qt_internal_library(
         conlyopts = conlyopts,
         defines = defines,
         local_defines = local_defines + QT_PLATFORM_DEFINES,
-        deps = deps + extra_deps + select({
+        deps = [Label("//:runfiles_linkable_hint")] + deps + extra_deps + select({
             Label("@platforms//os:windows"): [Label("//:win_cxxabi_shim")],
             "//conditions:default": [],
         }),
@@ -365,17 +464,17 @@ def qt_internal_library(
         **cc_lib_kwargs
     )
 
+    shared_dyn_deps = list(dynamic_deps) if type(dynamic_deps) == type([]) else dynamic_deps
     if create_shared:
-        shared_dyn_deps = list(dynamic_deps) if type(dynamic_deps) == type([]) else dynamic_deps
         if type(shared_dyn_deps) == type([]):
-            if (":quick_shared" in shared_dyn_deps or "@qtdeclarative//:quick_shared" in shared_dyn_deps or Label("@qtdeclarative//:quick_shared") in shared_dyn_deps) and "@qtbase//:opengl_shared" not in shared_dyn_deps and Label("@qtbase//:opengl_shared") not in shared_dyn_deps and ":opengl_shared" not in shared_dyn_deps:
+            if (":quick_shared" in shared_dyn_deps or "@qtdeclarative//:quick_shared" in shared_dyn_deps) and "@qtbase//:opengl_shared" not in shared_dyn_deps and Label("@qtbase//:opengl_shared") not in shared_dyn_deps and ":opengl_shared" not in shared_dyn_deps:
                 shared_dyn_deps.append(Label("@qtbase//:opengl_shared"))
             if "@qtbase//:dbus_shared" in shared_dyn_deps or Label("@qtbase//:dbus_shared") in shared_dyn_deps or "@qtbase//:gui_shared" in shared_dyn_deps or Label("@qtbase//:gui_shared") in shared_dyn_deps:
                 shared_dyn_deps = [d for d in shared_dyn_deps if d != "@qtbase//:dbus_shared" and d != Label("@qtbase//:dbus_shared")] + select({
                     Label("@platforms//os:windows"): [],
                     "//conditions:default": [Label("@qtbase//:dbus_shared")],
                 })
-        shared_roots = [":" + name]
+        shared_roots = [":" + cc_lib_name]
         if type(exports_filter) == type([]) and ("@glib//glib:glib" in exports_filter):
             shared_roots = shared_roots + select({
                 Label("@platforms//os:linux"): ["@glib//glib:glib"],
@@ -407,6 +506,17 @@ def qt_internal_library(
             visibility = visibility,
             tags = tags,
             **common_kwargs
+        )
+
+    if has_shared_info:
+        _qt_library_target(
+            name = name,
+            lib = ":" + cc_lib_name,
+            shared_lib = (":" + name + "_shared") if create_shared else None,
+            dynamic_deps = shared_dyn_deps,
+            visibility = visibility,
+            tags = tags,
+            **cc_lib_kwargs
         )
 
 def qt_static_plugin(
@@ -455,7 +565,7 @@ def qt_static_plugin(
       defines: Public defines.
       local_defines: Private defines; `QT_PLUGIN` and `QT_STATICPLUGIN` are added.
       deps: Dependencies.
-      dynamic_deps: Currently unused (kept for API symmetry with qt_internal_library).
+      dynamic_deps: Optional `cc_shared_library` dependencies required at link/run time.
       linkopts: Forwarded to `cc_library`.
       moc_unity: See `qt_internal_library`.
       applicable_licenses: Optional license labels forwarded to `cc_library`.

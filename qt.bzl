@@ -4,10 +4,15 @@ load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
+load("@rules_cc//cc/common:cc_shared_library_hint_info.bzl", "CcSharedLibraryHintInfo")
+load("@rules_cc//cc/common:cc_shared_library_info.bzl", "CcSharedLibraryInfo")
 load(
     ":qt_internal_library.bzl",
     "QT_PLATFORM_COPTS",
     "QT_PLATFORM_DEFINES",
+    "QtSharedLibraryInfo",
     _QT_SHARED_PLATFORM_LINKOPTS = "QT_SHARED_PLATFORM_LINKOPTS",
     _qt_internal_library = "qt_internal_library",
     _qt_static_plugin = "qt_static_plugin",
@@ -46,2901 +51,177 @@ qt_rep = _qt_rep
 qt_scxml = _qt_scxml
 qt_sync_headers = _qt_sync_headers
 
-_QTQML_BASE_SHARED = [
-    "@qtdeclarative//:qml_shared",
-    "@qtbase//:network_shared",
-    "@qtbase//:core_shared",
-]
+QtSharedLibraryAspectInfo = provider(
+    doc = "Aggregated QtSharedLibraryInfo across transitive dependencies.",
+    fields = {
+        "dynamic_deps": "depset of dynamic_dep_entry structs in topological order.",
+        "runfiles_files": "depset of runtime File artifacts.",
+        "qt_lib_labels": "depset of Label of internal *_qt_lib targets.",
+    },
+)
 
-_QTQUICK_BASE_SHARED = [
-    "@qtdeclarative//:quick_shared",
-    "@qtdeclarative//:qmlmeta_shared",
-    "@qtdeclarative//:qmlmodels_shared",
-    "@qtdeclarative//:qmlworkerscript_shared",
-    "@qtdeclarative//:qml_shared",
-    "@qtbase//:opengl_shared",
-    "@qtbase//:gui_shared",
-    "@qtbase//:dbus_shared",
-    "@qtbase//:network_shared",
-    "@qtbase//:core_shared",
-]
+def _qt_shared_library_aspect_impl(target, ctx):
+    direct_dyn = []
+    trans_dyn = []
+    direct_rf = []
+    trans_rf = []
+    direct_qt_libs = []
+    trans_qt_libs = []
 
-_QTQUICKCONTROLS2_BASE_SHARED = [
-    "@qtdeclarative//:quickcontrols2_shared",
-    "@qtdeclarative//:quickcontrols2impl_shared",
-    "@qtdeclarative//:quicktemplates2_shared",
-] + _QTQUICK_BASE_SHARED
+    if QtSharedLibraryInfo in target:
+        info = target[QtSharedLibraryInfo]
+        trans_dyn.append(info.dynamic_deps)
+        trans_rf.append(info.runfiles_files)
+        trans_qt_libs.append(info.qt_lib_labels)
 
-# Map known @qtbase cc_library targets to their transitive cc_shared_library targets
-_QTBASE_SHARED_MAP = {
-    "@qtbase//:core": ["@qtbase//:core_shared"],
-    ":core": ["@qtbase//:core_shared"],
-    "@qtbase//:concurrent": ["@qtbase//:concurrent_shared", "@qtbase//:core_shared"],
-    ":concurrent": ["@qtbase//:concurrent_shared", "@qtbase//:core_shared"],
-    "@qtbase//:dbus": ["@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":dbus": ["@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:gui": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":gui": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:widgets": [
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":widgets": [
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtbase//:printsupport": [
-        "@qtbase//:printsupport_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":printsupport": [
-        "@qtbase//:printsupport_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtbase//:opengl": [
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":opengl": [
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtbase//:openglwidgets": [
-        "@qtbase//:openglwidgets_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":openglwidgets": [
-        "@qtbase//:openglwidgets_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtbase//:test": ["@qtbase//:test_shared", "@qtbase//:core_shared"],
-    ":test": ["@qtbase//:test_shared", "@qtbase//:core_shared"],
-    "@qtbase//:offscreen": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":offscreen": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:xcb": ["@qtbase//:xcb_qpa_shared", "@qtbase//:x11_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":xcb": ["@qtbase//:xcb_qpa_shared", "@qtbase//:x11_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qxcb_glx_integration": ["@qtbase//:xcb_qpa_shared", "@qtbase//:x11_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":qxcb_glx_integration": ["@qtbase//:xcb_qpa_shared", "@qtbase//:x11_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qxcb_egl_integration": ["@qtbase//:xcb_qpa_shared", "@qtbase//:x11_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":qxcb_egl_integration": ["@qtbase//:xcb_qpa_shared", "@qtbase//:x11_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:cocoa": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":cocoa": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:windows": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":windows": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:xml": ["@qtbase//:xml_shared", "@qtbase//:core_shared"],
-    ":xml": ["@qtbase//:xml_shared", "@qtbase//:core_shared"],
-    "@qtbase//:sql": ["@qtbase//:sql_shared", "@qtbase//:core_shared"],
-    ":sql": ["@qtbase//:sql_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qsqlite": ["@qtbase//:sql_shared", "@qtbase//:core_shared"],
-    ":qsqlite": ["@qtbase//:sql_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qsqlodbc": ["@qtbase//:sql_shared", "@qtbase//:core_shared"],
-    ":qsqlodbc": ["@qtbase//:sql_shared", "@qtbase//:core_shared"],
-    "@qtbase//:sqldriver_plugins": ["@qtbase//:sql_shared", "@qtbase//:core_shared"],
-    ":sqldriver_plugins": ["@qtbase//:sql_shared", "@qtbase//:core_shared"],
-    "@qtbase//:network": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":network": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qopensslbackend": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":qopensslbackend": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qcertonlybackend": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":qcertonlybackend": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qsecuretransportbackend": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":qsecuretransportbackend": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qschannelbackend": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":qschannelbackend": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtbase//:tls_plugins": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":tls_plugins": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qglib": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":qglib": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qnetworkmanager": ["@qtbase//:network_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":qnetworkmanager": ["@qtbase//:network_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qapplenetworkinformation": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":qapplenetworkinformation": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qnetworklistmanager": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":qnetworklistmanager": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtbase//:networkinformation_plugins": ["@qtbase//:network_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":networkinformation_plugins": ["@qtbase//:network_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qgif": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":qgif": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qico": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":qico": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qjpeg": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":qjpeg": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:imageformats": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":imageformats": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qmacstyle": ["@qtbase//:widgets_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":qmacstyle": ["@qtbase//:widgets_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qmodernwindowsstyle": ["@qtbase//:widgets_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":qmodernwindowsstyle": ["@qtbase//:widgets_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:style_plugins": ["@qtbase//:widgets_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":style_plugins": ["@qtbase//:widgets_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:composeplatforminputcontextplugin": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":composeplatforminputcontextplugin": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:ibusplatforminputcontextplugin": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":ibusplatforminputcontextplugin": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:platforminputcontext_plugins": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":platforminputcontext_plugins": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qxdgdesktopportal": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":qxdgdesktopportal": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:platformtheme_plugins": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    ":platformtheme_plugins": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtbase//:qctf": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":qctf": ["@qtbase//:network_shared", "@qtbase//:core_shared"],
-    # --- @qtsvg ---
-    "@qtsvg//:svg": ["@qtsvg//:svg_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtsvg//:svgwidgets": [
-        "@qtsvg//:svgwidgets_shared",
-        "@qtsvg//:svg_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtsvg//:qsvg": ["@qtsvg//:svg_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtsvg//:qsvgicon": ["@qtsvg//:svg_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    # --- @qtshadertools ---
-    "@qtshadertools//:shadertools": ["@qtshadertools//:shadertools_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    # --- @qtimageformats (static plugins; depend only on QtGui) ---
-    "@qtimageformats//:imageformats": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtimageformats//:qicns": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtimageformats//:qmacheif": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtimageformats//:qmacjp2": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtimageformats//:qtga": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtimageformats//:qtiff": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtimageformats//:qwbmp": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtimageformats//:qwebp": ["@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    # --- @qtdeclarative ---
-    "@qtdeclarative//:qml": _QTQML_BASE_SHARED,
-    ":qml": _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmlcompiler": ["@qtdeclarative//:qmlcompiler_shared"] + _QTQML_BASE_SHARED,
-    ":qmlcompiler": ["@qtdeclarative//:qmlcompiler_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmldom": ["@qtdeclarative//:qmlcompiler_shared"] + _QTQML_BASE_SHARED,
-    ":qmldom": ["@qtdeclarative//:qmlcompiler_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmlformat_lib": ["@qtdeclarative//:qmlcompiler_shared"] + _QTQML_BASE_SHARED,
-    ":qmlformat_lib": ["@qtdeclarative//:qmlcompiler_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmlls_lib": ["@qtdeclarative//:qmlcompiler_shared"] + _QTQML_BASE_SHARED,
-    ":qmlls_lib": ["@qtdeclarative//:qmlcompiler_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmlmodels": ["@qtdeclarative//:qmlmodels_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:modelsplugin": ["@qtdeclarative//:qmlmodels_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmlworkerscript": ["@qtdeclarative//:qmlworkerscript_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:workerscriptplugin": ["@qtdeclarative//:qmlworkerscript_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmlmeta": [
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-    ] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmlplugin": [
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-    ] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmlcore": ["@qtdeclarative//:qmlcore_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qtqmlcoreplugin": ["@qtdeclarative//:qmlcore_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmlnetwork": ["@qtdeclarative//:qmlnetwork_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmlnetworkplugin": ["@qtdeclarative//:qmlnetwork_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmllocalstorage": ["@qtdeclarative//:qmllocalstorage_shared", "@qtbase//:sql_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmllocalstorageplugin": ["@qtdeclarative//:qmllocalstorage_shared", "@qtbase//:sql_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmlxmllistmodel": ["@qtdeclarative//:qmlxmllistmodel_shared", "@qtdeclarative//:qmlmodels_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmlxmllistmodelplugin": ["@qtdeclarative//:qmlxmllistmodel_shared", "@qtdeclarative//:qmlmodels_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:quick": _QTQUICK_BASE_SHARED,
-    ":quick": _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:qtquick2plugin": _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quickwindow": _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quicklayouts": ["@qtdeclarative//:quicklayouts_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:qquicklayoutsplugin": ["@qtdeclarative//:quicklayouts_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quickshapes": ["@qtdeclarative//:quickshapes_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:qmlshapesplugin": ["@qtdeclarative//:quickshapes_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quickshapesdesignhelpers": ["@qtdeclarative//:quickshapesdesignhelpers_shared", "@qtdeclarative//:quickshapes_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:qtquickshapesdesignhelpersplugin": ["@qtdeclarative//:quickshapesdesignhelpers_shared", "@qtdeclarative//:quickshapes_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quickshapesdesignhelpersplugin": ["@qtdeclarative//:quickshapesdesignhelpers_shared", "@qtdeclarative//:quickshapes_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quickparticles": ["@qtdeclarative//:quickparticles_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:particlesplugin": ["@qtdeclarative//:quickparticles_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quickeffects": ["@qtdeclarative//:quickeffects_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:effectsplugin": ["@qtdeclarative//:quickeffects_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quickvectorimagegenerator": [
-        "@qtdeclarative//:quickvectorimagegenerator_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtsvg//:svg_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    ":quickvectorimagegenerator": [
-        "@qtdeclarative//:quickvectorimagegenerator_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtsvg//:svg_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quickvectorimagehelpers": [
-        "@qtdeclarative//:quickvectorimagehelpers_shared",
-        "@qtdeclarative//:quickvectorimagegenerator_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtsvg//:svg_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:qquickvectorimagehelpersplugin": [
-        "@qtdeclarative//:quickvectorimagehelpers_shared",
-        "@qtdeclarative//:quickvectorimagegenerator_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtsvg//:svg_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quickvectorimagehelpersplugin": [
-        "@qtdeclarative//:quickvectorimagehelpers_shared",
-        "@qtdeclarative//:quickvectorimagegenerator_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtsvg//:svg_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quickvectorimage": [
-        "@qtdeclarative//:quickvectorimage_shared",
-        "@qtdeclarative//:quickvectorimagehelpers_shared",
-        "@qtdeclarative//:quickvectorimagegenerator_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtsvg//:svg_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:qquickvectorimageplugin": [
-        "@qtdeclarative//:quickvectorimage_shared",
-        "@qtdeclarative//:quickvectorimagehelpers_shared",
-        "@qtdeclarative//:quickvectorimagegenerator_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtsvg//:svg_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quickvectorimageplugin": [
-        "@qtdeclarative//:quickvectorimage_shared",
-        "@qtdeclarative//:quickvectorimagehelpers_shared",
-        "@qtdeclarative//:quickvectorimagegenerator_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtsvg//:svg_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quicktemplates2": ["@qtdeclarative//:quicktemplates2_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:qtquicktemplates2plugin": ["@qtdeclarative//:quicktemplates2_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2impl": [
-        "@qtdeclarative//:quickcontrols2impl_shared",
-        "@qtdeclarative//:quicktemplates2_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2implplugin": [
-        "@qtdeclarative//:quickcontrols2impl_shared",
-        "@qtdeclarative//:quicktemplates2_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2": _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2plugin": [
-        "@qtdeclarative//:quickcontrols2fusion_shared",
-        "@qtdeclarative//:quickcontrols2fusionstyleimpl_shared",
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2basicstyleimpl": [
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2basicstyleimplplugin": [
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2basic": [
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2basicstyleplugin": [
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2fusionstyleimpl": [
-        "@qtdeclarative//:quickcontrols2fusionstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2fusionstyleimplplugin": [
-        "@qtdeclarative//:quickcontrols2fusionstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2fusion": [
-        "@qtdeclarative//:quickcontrols2fusion_shared",
-        "@qtdeclarative//:quickcontrols2fusionstyleimpl_shared",
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2fusionstyleplugin": [
-        "@qtdeclarative//:quickcontrols2fusion_shared",
-        "@qtdeclarative//:quickcontrols2fusionstyleimpl_shared",
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2materialstyleimpl": [
-        "@qtdeclarative//:quickcontrols2materialstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2materialstyleimplplugin": [
-        "@qtdeclarative//:quickcontrols2materialstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2material": [
-        "@qtdeclarative//:quickcontrols2material_shared",
-        "@qtdeclarative//:quickcontrols2materialstyleimpl_shared",
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2materialstyleplugin": [
-        "@qtdeclarative//:quickcontrols2material_shared",
-        "@qtdeclarative//:quickcontrols2materialstyleimpl_shared",
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2universalstyleimpl": [
-        "@qtdeclarative//:quickcontrols2universalstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2universalstyleimplplugin": [
-        "@qtdeclarative//:quickcontrols2universalstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2universal": [
-        "@qtdeclarative//:quickcontrols2universal_shared",
-        "@qtdeclarative//:quickcontrols2universalstyleimpl_shared",
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2universalstyleplugin": [
-        "@qtdeclarative//:quickcontrols2universal_shared",
-        "@qtdeclarative//:quickcontrols2universalstyleimpl_shared",
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2imaginestyleimpl": _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2imaginestyleimplplugin": _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2imagine": [
-        "@qtdeclarative//:quickcontrols2imagine_shared",
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2imaginestyleplugin": [
-        "@qtdeclarative//:quickcontrols2imagine_shared",
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2fluentwinui3styleimpl": [
-        "@qtdeclarative//:quickcontrols2fluentwinui3styleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2fluentwinui3styleimplplugin": [
-        "@qtdeclarative//:quickcontrols2fluentwinui3styleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2fluentwinui3": [
-        "@qtdeclarative//:quickcontrols2fluentwinui3styleimpl_shared",
-        "@qtdeclarative//:quickcontrols2fusion_shared",
-        "@qtdeclarative//:quickcontrols2fusionstyleimpl_shared",
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2fluentwinui3styleplugin": [
-        "@qtdeclarative//:quickcontrols2fluentwinui3styleimpl_shared",
-        "@qtdeclarative//:quickcontrols2fusion_shared",
-        "@qtdeclarative//:quickcontrols2fusionstyleimpl_shared",
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quicknativestyle": [
-        "@qtdeclarative//:quicklayouts_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2nativestyleplugin": [
-        "@qtdeclarative//:quicklayouts_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2macosstyleimpl": _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2macosstyleimplplugin": _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2macos": [
-        "@qtdeclarative//:quicklayouts_shared",
-        "@qtdeclarative//:quickcontrols2fusion_shared",
-        "@qtdeclarative//:quickcontrols2fusionstyleimpl_shared",
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2macosstyleplugin": [
-        "@qtdeclarative//:quicklayouts_shared",
-        "@qtdeclarative//:quickcontrols2fusion_shared",
-        "@qtdeclarative//:quickcontrols2fusionstyleimpl_shared",
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2iosstyleimpl": _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2iosstyleimplplugin": _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2ios": [
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2iosstyleplugin": [
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2windowsstyleimpl": _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2windowsstyleimplplugin": _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickcontrols2windows": [
-        "@qtdeclarative//:quicklayouts_shared",
-        "@qtdeclarative//:quickcontrols2fusion_shared",
-        "@qtdeclarative//:quickcontrols2fusionstyleimpl_shared",
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:qtquickcontrols2windowsstyleplugin": [
-        "@qtdeclarative//:quicklayouts_shared",
-        "@qtdeclarative//:quickcontrols2fusion_shared",
-        "@qtdeclarative//:quickcontrols2fusionstyleimpl_shared",
-        "@qtdeclarative//:quickcontrols2basic_shared",
-        "@qtdeclarative//:quickcontrols2basicstyleimpl_shared",
-    ] + _QTQUICKCONTROLS2_BASE_SHARED,
-    "@qtdeclarative//:quickdialogs2utils": [
-        "@qtdeclarative//:quickdialogs2utils_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtdeclarative//:quickdialogs2quickimpl": [
-        "@qtdeclarative//:quickdialogs2quickimpl_shared",
-        "@qtdeclarative//:quickdialogs2utils_shared",
-        "@qtdeclarative//:labsfoldermodel_shared",
-        "@qtdeclarative//:quicklayouts_shared",
-        "@qtdeclarative//:quickcontrols2impl_shared",
-        "@qtdeclarative//:quicktemplates2_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:qtquickdialogs2quickimplplugin": [
-        "@qtdeclarative//:quickdialogs2quickimpl_shared",
-        "@qtdeclarative//:quickdialogs2utils_shared",
-        "@qtdeclarative//:labsfoldermodel_shared",
-        "@qtdeclarative//:quicklayouts_shared",
-        "@qtdeclarative//:quickcontrols2impl_shared",
-        "@qtdeclarative//:quicktemplates2_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quickdialogs2": [
-        "@qtdeclarative//:quickdialogs2_shared",
-        "@qtdeclarative//:quickdialogs2quickimpl_shared",
-        "@qtdeclarative//:quickdialogs2utils_shared",
-        "@qtdeclarative//:labsfoldermodel_shared",
-        "@qtdeclarative//:quicklayouts_shared",
-        "@qtdeclarative//:quickcontrols2impl_shared",
-        "@qtdeclarative//:quicktemplates2_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:qtquickdialogsplugin": [
-        "@qtdeclarative//:quickdialogs2_shared",
-        "@qtdeclarative//:quickdialogs2quickimpl_shared",
-        "@qtdeclarative//:quickdialogs2utils_shared",
-        "@qtdeclarative//:labsfoldermodel_shared",
-        "@qtdeclarative//:quicklayouts_shared",
-        "@qtdeclarative//:quickcontrols2impl_shared",
-        "@qtdeclarative//:quicktemplates2_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:labsanimation": ["@qtdeclarative//:labsanimation_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:labsanimationplugin": ["@qtdeclarative//:labsanimation_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:labssettings": ["@qtdeclarative//:labssettings_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmlsettingsplugin": ["@qtdeclarative//:labssettings_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:labsmodels": ["@qtdeclarative//:labsmodels_shared", "@qtdeclarative//:qmlmodels_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:labsmodelsplugin": ["@qtdeclarative//:labsmodels_shared", "@qtdeclarative//:qmlmodels_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:labsfoldermodel": ["@qtdeclarative//:labsfoldermodel_shared", "@qtdeclarative//:qmlmodels_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmlfolderlistmodelplugin": ["@qtdeclarative//:labsfoldermodel_shared", "@qtdeclarative//:qmlmodels_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:labsplatform": [
-        "@qtdeclarative//:labsplatform_shared",
-        "@qtdeclarative//:quicktemplates2_shared",
-        "@qtbase//:widgets_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:qtlabsplatformplugin": [
-        "@qtdeclarative//:labsplatform_shared",
-        "@qtdeclarative//:quicktemplates2_shared",
-        "@qtbase//:widgets_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:labswavefrontmesh": ["@qtdeclarative//:labswavefrontmesh_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:qmlwavefrontmeshplugin": ["@qtdeclarative//:labswavefrontmesh_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:labssharedimage": ["@qtdeclarative//:labssharedimage_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:sharedimageplugin": ["@qtdeclarative//:labssharedimage_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:qtlabssharedimageplugin": ["@qtdeclarative//:labssharedimage_shared"] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:labssynchronizer": ["@qtdeclarative//:labssynchronizer_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:labssynchronizerplugin": ["@qtdeclarative//:labssynchronizer_shared"] + _QTQML_BASE_SHARED,
-    "@qtdeclarative//:quickwidgets": [
-        "@qtdeclarative//:quickwidgets_shared",
-        "@qtbase//:widgets_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quicktest": [
-        "@qtdeclarative//:quicktest_shared",
-        "@qtbase//:test_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:quicktestplugin": [
-        "@qtdeclarative//:quicktest_shared",
-        "@qtbase//:test_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:packetprotocol": ["@qtbase//:core_shared"],
-    "@qtdeclarative//:qmldebug": _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmldbg_debugger": _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmldbg_inspector": _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:qmldbg_local": _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmldbg_messages": _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmldbg_native": _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmldbg_nativedebugger": _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmldbg_preview": _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:qmldbg_profiler": _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmldbg_quickprofiler": _QTQUICK_BASE_SHARED,
-    "@qtdeclarative//:qmldbg_server": _QTQML_BASE_SHARED,
-    "@qtdeclarative//:qmldbg_tcp": _QTQML_BASE_SHARED,
-    # --- Phase 2 Milestone 3 modules ---
-    "@qtwebsockets//:websockets": ["@qtwebsockets//:websockets_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtwebchannel//:webchannel": ["@qtwebchannel//:webchannel_shared", "@qtdeclarative//:qml_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtwebchannel//:webchannelquick": ["@qtwebchannel//:webchannelquick_shared", "@qtwebchannel//:webchannel_shared", "@qtdeclarative//:qml_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtwebchannel//:webchannelquickplugin": ["@qtwebchannel//:webchannelquick_shared", "@qtwebchannel//:webchannel_shared", "@qtdeclarative//:qml_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qthttpserver//:httpserver": ["@qthttpserver//:httpserver_shared", "@qtwebsockets//:websockets_shared", "@qtbase//:network_shared", "@qtbase//:concurrent_shared", "@qtbase//:core_shared"],
-    "@qtnetworkauth//:networkauth": ["@qtnetworkauth//:networkauth_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtserialport//:serialport": ["@qtserialport//:serialport_shared", "@qtbase//:core_shared"],
-    "@qtserialbus//:serialbus": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":serialbus": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtserialbus//:qtpassthrucanbus": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":qtpassthrucanbus": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtserialbus//:qtpeakcanbus": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":qtpeakcanbus": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtserialbus//:qtsocketcanbus": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":qtsocketcanbus": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtserialbus//:qtsysteccanbus": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":qtsysteccanbus": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtserialbus//:qttinycanbus": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":qttinycanbus": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtserialbus//:qtvectorcanbus": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":qtvectorcanbus": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtserialbus//:qtvirtualcanbus": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    ":qtvirtualcanbus": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtserialbus//:canbus_plugins": ["@qtserialbus//:serialbus_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtsensors//:sensors": ["@qtsensors//:sensors_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtsensors//:qtsensors_dummy": ["@qtsensors//:sensors_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtsensors//:qtsensors_generic": ["@qtsensors//:sensors_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtsensors//:sensorsquick": ["@qtsensors//:sensorsquick_shared", "@qtsensors//:sensors_shared", "@qtdeclarative//:qml_shared", "@qtbase//:dbus_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtsensors//:sensorsquickplugin": ["@qtsensors//:sensorsquick_shared", "@qtsensors//:sensors_shared", "@qtdeclarative//:qml_shared", "@qtbase//:dbus_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtsensors//:qtsensors_iio_sensor_proxy": ["@qtsensors//:sensors_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtsensors//:qtsensors_linuxsys": ["@qtsensors//:sensors_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtsensors//:sensors_plugins": ["@qtsensors//:sensors_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qt5compat//:core5compat": ["@qt5compat//:core5compat_shared", "@qtbase//:core_shared"],
-    "@qtcharts//:charts": [
-        "@qtcharts//:charts_shared",
-        "@qtbase//:openglwidgets_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtcharts//:chartsqml": [
-        "@qtcharts//:chartsqml_shared",
-        "@qtcharts//:charts_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:openglwidgets_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtcharts//:qtchartsqml2": [
-        "@qtcharts//:chartsqml_shared",
-        "@qtcharts//:charts_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:openglwidgets_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtpositioning//:positioning": ["@qtpositioning//:positioning_shared", "@qtbase//:core_shared"],
-    "@qtpositioning//:positioningquick": [
-        "@qtpositioning//:positioningquick_shared",
-        "@qtpositioning//:positioning_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtpositioning//:positioningquickplugin": [
-        "@qtpositioning//:positioningquick_shared",
-        "@qtpositioning//:positioning_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtpositioning//:qtposition_positionpoll": ["@qtpositioning//:positioning_shared", "@qtbase//:core_shared"],
-    "@qtpositioning//:qtposition_nmea": ["@qtpositioning//:positioning_shared", "@qtserialport//:serialport_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtpositioning//:qtposition_geoclue2": ["@qtpositioning//:positioning_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtpositioning//:qtposition_cl": ["@qtpositioning//:positioning_shared", "@qtbase//:core_shared"],
-    "@qtpositioning//:position_plugins": ["@qtpositioning//:positioning_shared", "@qtserialport//:serialport_shared", "@qtbase//:dbus_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtlocation//:location": [
-        "@qtlocation//:location_shared",
-        "@qtpositioning//:positioningquick_shared",
-        "@qtpositioning//:positioning_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtlocation//:declarative_location": [
-        "@qtlocation//:location_shared",
-        "@qtpositioning//:positioningquick_shared",
-        "@qtpositioning//:positioning_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtlocation//:qtgeoservices_itemsoverlay": [
-        "@qtlocation//:location_shared",
-        "@qtpositioning//:positioningquick_shared",
-        "@qtpositioning//:positioning_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtlocation//:qtgeoservices_osm": [
-        "@qtlocation//:location_shared",
-        "@qtpositioning//:positioningquick_shared",
-        "@qtpositioning//:positioning_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtlocation//:qtgeoservices_nokia": [
-        "@qtlocation//:location_shared",
-        "@qtpositioning//:positioningquick_shared",
-        "@qtpositioning//:positioning_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtlocation//:geoservices_plugins": [
-        "@qtlocation//:location_shared",
-        "@qtpositioning//:positioningquick_shared",
-        "@qtpositioning//:positioning_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtconnectivity//:bluetooth": ["@qtconnectivity//:bluetooth_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtconnectivity//:nfc": ["@qtconnectivity//:nfc_shared", "@qtbase//:core_shared"],
-    "@qtlottie//:lottievectorimagehelpers": [
-        "@qtlottie//:lottievectorimagehelpers_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtlottie//:lottievectorimagehelpersplugin": [
-        "@qtlottie//:lottievectorimagehelpers_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtlottie//:lottie": [
-        "@qtlottie//:lottie_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtlottie//:lottieqtplugin": [
-        "@qtlottie//:lottie_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtlottie//:lottievectorimagegenerator": [
-        "@qtlottie//:lottievectorimagegenerator_shared",
-        "@qtlottie//:lottievectorimagehelpers_shared",
-        "@qtlottie//:lottie_shared",
-        "@qtdeclarative//:quickvectorimagegenerator_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtsvg//:svg_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    ":lottievectorimagegenerator": [
-        "@qtlottie//:lottievectorimagegenerator_shared",
-        "@qtlottie//:lottievectorimagehelpers_shared",
-        "@qtlottie//:lottie_shared",
-        "@qtdeclarative//:quickvectorimagegenerator_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtsvg//:svg_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtlottie//:qlottievectorimage": [
-        "@qtlottie//:lottievectorimagegenerator_shared",
-        "@qtlottie//:lottievectorimagehelpers_shared",
-        "@qtlottie//:lottie_shared",
-        "@qtdeclarative//:quickvectorimagegenerator_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtsvg//:svg_shared",
-    ] + _QTQUICK_BASE_SHARED,
-    "@qtquicktimeline//:quicktimeline": [
-        "@qtquicktimeline//:quicktimeline_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquicktimeline//:qtquicktimelineplugin": [
-        "@qtquicktimeline//:quicktimeline_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquicktimeline//:quicktimelineblendtrees": [
-        "@qtquicktimeline//:quicktimelineblendtrees_shared",
-        "@qtquicktimeline//:quicktimeline_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquicktimeline//:qtquicktimelineblendtreesplugin": [
-        "@qtquicktimeline//:quicktimelineblendtrees_shared",
-        "@qtquicktimeline//:quicktimeline_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtvirtualkeyboard//:virtualkeyboard": [
-        "@qtvirtualkeyboard//:virtualkeyboard_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtremoteobjects//:remoteobjects": ["@qtremoteobjects//:remoteobjects_shared", "@qtbase//:network_shared", "@qtbase//:core_shared"],
-    "@qtremoteobjects//:remoteobjectsqml": [
-        "@qtremoteobjects//:remoteobjectsqml_shared",
-        "@qtremoteobjects//:remoteobjects_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtremoteobjects//:declarative_remoteobjects": [
-        "@qtremoteobjects//:remoteobjectsqml_shared",
-        "@qtremoteobjects//:remoteobjects_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtscxml//:scxml": ["@qtscxml//:scxml_shared", "@qtbase//:core_shared"],
-    "@qtscxml//:scxmlqml": [
-        "@qtscxml//:scxmlqml_shared",
-        "@qtscxml//:scxml_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtscxml//:declarative_scxml": [
-        "@qtscxml//:scxmlqml_shared",
-        "@qtscxml//:scxml_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtscxml//:statemachine": ["@qtscxml//:statemachine_shared", "@qtbase//:gui_shared", "@qtbase//:dbus_shared", "@qtbase//:core_shared"],
-    "@qtscxml//:statemachineqml": [
-        "@qtscxml//:statemachineqml_shared",
-        "@qtscxml//:statemachine_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtscxml//:qtqmlstatemachine": [
-        "@qtscxml//:statemachineqml_shared",
-        "@qtscxml//:statemachine_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    # --- Phase 2 Milestone 4 modules ---
-    "@qtquick3d//:glslparser": ["@qtquick3d//:glslparser_shared", "@qtbase//:core_shared"],
-    ":glslparser": ["@qtquick3d//:glslparser_shared", "@qtbase//:core_shared"],
-    "@qtquick3d//:utils": [
-        "@qtquick3d//:utils_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":utils": [
-        "@qtquick3d//:utils_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:assetimport": [
-        "@qtquick3d//:assetimport_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":assetimport": [
-        "@qtquick3d//:assetimport_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:runtimerender": [
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":runtimerender": [
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:quick3d": [
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":quick3d": [
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:qquick3dplugin": [
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":qquick3dplugin": [
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:assetutils_lib": [
-        "@qtquick3d//:assetutils_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:assetimport_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtquicktimeline//:quicktimeline_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":assetutils_lib": [
-        "@qtquick3d//:assetutils_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:assetimport_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtquicktimeline//:quicktimeline_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:assetutils": [
-        "@qtquick3d//:assetutils_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:assetimport_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtquicktimeline//:quicktimeline_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":assetutils": [
-        "@qtquick3d//:assetutils_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:assetimport_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtquicktimeline//:quicktimeline_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:qtquick3dassetutilsplugin": [
-        "@qtquick3d//:assetutils_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:assetimport_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtquicktimeline//:quicktimeline_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":qtquick3dassetutilsplugin": [
-        "@qtquick3d//:assetutils_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:assetimport_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtquicktimeline//:quicktimeline_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:assimpimporterplugin": [
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:assetimport_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":assimpimporterplugin": [
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:assetimport_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:quick3dparticles": [
-        "@qtquick3d//:quick3dparticles_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":quick3dparticles": [
-        "@qtquick3d//:quick3dparticles_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:qtquick3dparticles3dplugin": [
-        "@qtquick3d//:quick3dparticles_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":qtquick3dparticles3dplugin": [
-        "@qtquick3d//:quick3dparticles_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:quick3dhelpersimpl": [
-        "@qtquick3d//:quick3dhelpersimpl_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":quick3dhelpersimpl": [
-        "@qtquick3d//:quick3dhelpersimpl_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:qtquick3dhelpersimplplugin": [
-        "@qtquick3d//:quick3dhelpersimpl_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":qtquick3dhelpersimplplugin": [
-        "@qtquick3d//:quick3dhelpersimpl_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:quick3dhelpers": [
-        "@qtquick3d//:quick3dhelpers_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":quick3dhelpers": [
-        "@qtquick3d//:quick3dhelpers_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:qtquick3dhelpersplugin": [
-        "@qtquick3d//:quick3dhelpers_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":qtquick3dhelpersplugin": [
-        "@qtquick3d//:quick3dhelpers_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:quick3deffects": [
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":quick3deffects": [
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:qtquick3deffectplugin": [
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":qtquick3deffectplugin": [
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:iblbaker": [
-        "@qtquick3d//:iblbaker_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":iblbaker": [
-        "@qtquick3d//:iblbaker_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:quick3dxr": [
-        "@qtquick3d//:quick3dxr_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":quick3dxr": [
-        "@qtquick3d//:quick3dxr_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:quick3dxrplugin": [
-        "@qtquick3d//:quick3dxr_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":quick3dxrplugin": [
-        "@qtquick3d//:quick3dxr_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3d//:qmldbg_quick3dprofiler": [
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":qmldbg_quick3dprofiler": [
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3dphysics//:quick3dphysics": [
-        "@qtquick3dphysics//:quick3dphysics_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3dphysics//:qquick3dphysicsplugin": [
-        "@qtquick3dphysics//:quick3dphysics_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtquick3dphysics//:quick3dphysicshelpers": [
-        "@qtquick3dphysics//:quick3dphysicshelpers_shared",
-        "@qtquick3dphysics//:quick3dphysics_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtgraphs//:graphs": [
-        "@qtgraphs//:graphs_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtgraphs//:graphswidgets": [
-        "@qtgraphs//:graphswidgets_shared",
-        "@qtgraphs//:graphs_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quickwidgets_shared",
-        "@qtdeclarative//:quickshapes_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtdatavis3d//:datavisualization": [
-        "@qtdatavis3d//:datavisualization_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtdatavis3d//:datavisualizationqml": [
-        "@qtdatavis3d//:datavisualizationqml_shared",
-        "@qtdatavis3d//:datavisualization_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtdatavis3d//:datavisualizationqmlplugin": [
-        "@qtdatavis3d//:datavisualizationqml_shared",
-        "@qtdatavis3d//:datavisualization_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qt3d//:3dcore": [
-        "@qt3d//:3dcore_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qt3d//:3drender": [
-        "@qt3d//:3drender_shared",
-        "@qt3d//:3dcore_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qt3d//:3dinput": [
-        "@qt3d//:3dinput_shared",
-        "@qt3d//:3dcore_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qt3d//:3dlogic": [
-        "@qt3d//:3dlogic_shared",
-        "@qt3d//:3dcore_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qt3d//:3dextras": [
-        "@qt3d//:3dextras_shared",
-        "@qt3d//:3drender_shared",
-        "@qt3d//:3dinput_shared",
-        "@qt3d//:3dlogic_shared",
-        "@qt3d//:3dcore_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qt3d//:3danimation": [
-        "@qt3d//:3danimation_shared",
-        "@qt3d//:3drender_shared",
-        "@qt3d//:3dcore_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qt3d//:3dquick": [
-        "@qt3d//:3dquick_shared",
-        "@qt3d//:3dcore_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qt3d//:3dquickrender": [
-        "@qt3d//:3dquickrender_shared",
-        "@qt3d//:3dquick_shared",
-        "@qt3d//:3drender_shared",
-        "@qt3d//:3dcore_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qt3d//:3dquickinput": [
-        "@qt3d//:3dquickinput_shared",
-        "@qt3d//:3dquick_shared",
-        "@qt3d//:3dinput_shared",
-        "@qt3d//:3dcore_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qt3d//:3dquicklogic": [
-        "@qt3d//:3dquicklogic_shared",
-        "@qt3d//:3dlogic_shared",
-        "@qt3d//:3dcore_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qt3d//:3dquickextras": [
-        "@qt3d//:3dquickextras_shared",
-        "@qt3d//:3dquick_shared",
-        "@qt3d//:3dextras_shared",
-        "@qt3d//:3drender_shared",
-        "@qt3d//:3dinput_shared",
-        "@qt3d//:3dlogic_shared",
-        "@qt3d//:3dcore_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qt3d//:3dquickanimation": [
-        "@qt3d//:3dquickanimation_shared",
-        "@qt3d//:3dquick_shared",
-        "@qt3d//:3danimation_shared",
-        "@qt3d//:3drender_shared",
-        "@qt3d//:3dcore_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qt3d//:3dquickscene2d": [
-        "@qt3d//:3dquickscene2d_shared",
-        "@qt3d//:3dquick_shared",
-        "@qt3d//:3drender_shared",
-        "@qt3d//:3dcore_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qt3d//:3dquickscene3d": [
-        "@qt3d//:3dquickscene3d_shared",
-        "@qt3d//:3danimation_shared",
-        "@qt3d//:3drender_shared",
-        "@qt3d//:3dinput_shared",
-        "@qt3d//:3dlogic_shared",
-        "@qt3d//:3dcore_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:core_shared",
-    ],
-    # --- @qtmultimedia ---
-    "@qtmultimedia//:multimedia": [
-        "@qtmultimedia//:multimedia_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtmultimedia//:multimediawidgets": [
-        "@qtmultimedia//:multimediawidgets_shared",
-        "@qtmultimedia//:multimedia_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtmultimedia//:multimediaquick": [
-        "@qtmultimedia//:multimediaquick_shared",
-        "@qtmultimedia//:multimedia_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtmultimedia//:quickmultimedia": [
-        "@qtmultimedia//:multimediaquick_shared",
-        "@qtmultimedia//:multimedia_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtmultimedia//:spatialaudio": [
-        "@qtmultimedia//:spatialaudio_shared",
-        "@qtmultimedia//:multimedia_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtmultimedia//:spatialaudioquick3d": [
-        "@qtmultimedia//:spatialaudioquick3d_shared",
-        "@qtmultimedia//:spatialaudio_shared",
-        "@qtmultimedia//:multimediaquick_shared",
-        "@qtmultimedia//:multimedia_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtmultimedia//:quick3dspatialaudio": [
-        "@qtmultimedia//:spatialaudioquick3d_shared",
-        "@qtmultimedia//:spatialaudio_shared",
-        "@qtmultimedia//:multimediaquick_shared",
-        "@qtmultimedia//:multimedia_shared",
-        "@qtquick3d//:quick3d_shared",
-        "@qtquick3d//:runtimerender_shared",
-        "@qtquick3d//:utils_shared",
-        "@qtshadertools//:shadertools_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtmultimedia//:qffmpegmediaplugin": [
-        "@qtmultimedia//:ffmpeg_shared",
-        "@qtmultimedia//:multimedia_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtmultimedia//:qdarwinmediaplugin": [
-        "@qtmultimedia//:multimedia_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtmultimedia//:qwindowsmediaplugin": [
-        "@qtmultimedia//:multimedia_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtmultimedia//:multimedia_plugins": [
-        "@qtmultimedia//:ffmpeg_shared",
-        "@qtmultimedia//:multimedia_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    # --- @qtspeech ---
-    "@qtspeech//:tts": [
-        "@qtspeech//:tts_shared",
-        "@qtmultimedia//:multimedia_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtspeech//:ttsqml": [
-        "@qtspeech//:ttsqml_shared",
-        "@qtspeech//:tts_shared",
-        "@qtmultimedia//:multimedia_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtspeech//:ttsqmlplugin": [
-        "@qtspeech//:ttsqml_shared",
-        "@qtspeech//:tts_shared",
-        "@qtmultimedia//:multimedia_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtspeech//:qtexttospeech_mock": [
-        "@qtspeech//:tts_shared",
-        "@qtmultimedia//:multimedia_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtspeech//:qtexttospeech_speechd": [
-        "@qtspeech//:tts_shared",
-        "@qtmultimedia//:multimedia_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtspeech//:qtexttospeech_speechdarwin": [
-        "@qtspeech//:tts_shared",
-        "@qtmultimedia//:multimedia_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtspeech//:qtexttospeech_sapi": [
-        "@qtspeech//:tts_shared",
-        "@qtmultimedia//:multimedia_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtspeech//:tts_plugins": [
-        "@qtspeech//:tts_shared",
-        "@qtmultimedia//:multimedia_shared",
-        "@qtbase//:concurrent_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    # --- @qtbase Wayland client & @qtwayland ---
-    "@qtbase//:wayland_client": [
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtbase//:wl_shell_integration_private": [
-        "@qtbase//:wl_shell_integration_private_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtbase//:qwayland": [
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtbase//:qwayland_plugin": [
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtbase//:qwayland_bradient_decoration_plugin": [
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtbase//:qwayland_xdg_shell_integration_plugin": [
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtbase//:qwayland_wl_shell_integration_plugin": [
-        "@qtbase//:wl_shell_integration_private_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtbase//:qwayland_fullscreen_shell_v1_plugin": [
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtbase//:qwayland_egl_client_buffer_plugin": [
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtbase//:qwayland_shm_emulation_server_buffer_plugin": [
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtbase//:qwayland_drm_egl_server_buffer_plugin": [
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:wayland_compositor": [
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:wayland_egl_compositor_hw_integration_private": [
-        "@qtwayland//:wayland_egl_compositor_hw_integration_private_shared",
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:wayland_compositor_iviapplication": [
-        "@qtwayland//:wayland_compositor_iviapplication_shared",
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:wayland_compositor_presentationtime": [
-        "@qtwayland//:wayland_compositor_presentationtime_shared",
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:wayland_compositor_qtshell": [
-        "@qtwayland//:wayland_compositor_qtshell_shared",
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:wayland_compositor_wlshell": [
-        "@qtwayland//:wayland_compositor_wlshell_shared",
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:wayland_compositor_xdgshell": [
-        "@qtwayland//:wayland_compositor_xdgshell_shared",
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:qwaylandcompositorplugin": [
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:qwaylandcompositoriviapplicationplugin": [
-        "@qtwayland//:wayland_compositor_iviapplication_shared",
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:qwaylandcompositorpresentationtimeplugin": [
-        "@qtwayland//:wayland_compositor_presentationtime_shared",
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:qwaylandqtshellplugin": [
-        "@qtwayland//:wayland_compositor_qtshell_shared",
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:qwaylandcompositorwlshellplugin": [
-        "@qtwayland//:wayland_compositor_wlshell_shared",
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:qwaylandcompositorxdgshellplugin": [
-        "@qtwayland//:wayland_compositor_xdgshell_shared",
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:qwayland_adwaita_decoration_plugin": [
-        "@qtsvg//:svg_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:qwayland_ivi_shell_integration_plugin": [
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:qwayland_qt_shell_integration_plugin": [
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:qwayland_egl_compositor_buffer_plugin": [
-        "@qtwayland//:wayland_egl_compositor_hw_integration_private_shared",
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:qwayland_shm_emulation_compositor_buffer_plugin": [
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:qwayland_drm_egl_compositor_buffer_plugin": [
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwayland//:qwayland_eglstream_compositor_buffer_plugin": [
-        "@qtwayland//:wayland_egl_compositor_hw_integration_private_shared",
-        "@qtwayland//:wayland_compositor_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:wayland_client_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:x11_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    # --- @qtbase additional targets ---
-    "@qtbase//:qminimal_plugin": [
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtbase//:qsqlite_plugin": [
-        "@qtbase//:sql_shared",
-        "@qtbase//:core_shared",
-    ],
-    # --- @qtwebview ---
-    "@qtwebview//:webview": [
-        "@qtwebview//:webview_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwebview//:webviewquick": [
-        "@qtwebview//:webviewquick_shared",
-        "@qtwebview//:webview_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwebview//:qtwebviewquickplugin": [
-        "@qtwebview//:webviewquick_shared",
-        "@qtwebview//:webview_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwebview//:qtwebview_darwin": [
-        "@qtwebview//:webview_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtwebview//:webview_plugins": [
-        "@qtwebview//:webview_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    # --- @qtgrpc ---
-    "@qtgrpc//:protobuf": [
-        "@qtgrpc//:protobuf_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtgrpc//:protobufwellknowntypes": [
-        "@qtgrpc//:protobufwellknowntypes_shared",
-        "@qtgrpc//:protobuf_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtgrpc//:protobufqtcoretypes": [
-        "@qtgrpc//:protobufqtcoretypes_shared",
-        "@qtgrpc//:protobuf_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtgrpc//:protobufqtguitypes": [
-        "@qtgrpc//:protobufqtguitypes_shared",
-        "@qtgrpc//:protobufqtcoretypes_shared",
-        "@qtgrpc//:protobuf_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtgrpc//:protobufquick": [
-        "@qtgrpc//:protobufquick_shared",
-        "@qtgrpc//:protobuf_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtgrpc//:protobufquickplugin": [
-        "@qtgrpc//:protobufquick_shared",
-        "@qtgrpc//:protobuf_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtgrpc//:grpc": [
-        "@qtgrpc//:grpc_shared",
-        "@qtgrpc//:protobuf_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtgrpc//:grpcquick": [
-        "@qtgrpc//:grpcquick_shared",
-        "@qtgrpc//:grpc_shared",
-        "@qtgrpc//:protobufquick_shared",
-        "@qtgrpc//:protobuf_shared",
-        "@qtdeclarative//:qmlnetwork_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qtgrpc//:grpcquickplugin": [
-        "@qtgrpc//:grpcquick_shared",
-        "@qtgrpc//:grpc_shared",
-        "@qtgrpc//:protobufquick_shared",
-        "@qtgrpc//:protobuf_shared",
-        "@qtdeclarative//:qmlnetwork_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    # --- @qttools ---
-    "@qttools//:uiplugin": [
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":uiplugin": [
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qttools//:uitools": [
-        "@qttools//:uitools_shared",
-        "@qtbase//:openglwidgets_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":uitools": [
-        "@qttools//:uitools_shared",
-        "@qtbase//:openglwidgets_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qttools//:designer_lib": [
-        "@qttools//:designer_lib_shared",
-        "@qtbase//:openglwidgets_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:xml_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":designer_lib": [
-        "@qttools//:designer_lib_shared",
-        "@qtbase//:openglwidgets_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:xml_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qttools//:designercomponents": [
-        "@qttools//:designercomponents_shared",
-        "@qttools//:designer_lib_shared",
-        "@qtbase//:openglwidgets_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:xml_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":designercomponents": [
-        "@qttools//:designercomponents_shared",
-        "@qttools//:designer_lib_shared",
-        "@qtbase//:openglwidgets_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:xml_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qttools//:qquickwidgetplugin": [
-        "@qttools//:designer_lib_shared",
-        "@qtdeclarative//:quickwidgets_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:openglwidgets_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:xml_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qttools//:help": [
-        "@qttools//:help_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:sql_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":help": [
-        "@qttools//:help_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:sql_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qttools//:helpplugin": [
-        "@qttools//:help_shared",
-        "@qtdeclarative//:qmlcompiler_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:sql_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":helpplugin": [
-        "@qttools//:help_shared",
-        "@qtdeclarative//:qmlcompiler_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:sql_shared",
-        "@qtbase//:core_shared",
-    ],
-    "@qttools//:qlitehtml": [
-        "@qtbase//:printsupport_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":qlitehtml": [
-        "@qtbase//:printsupport_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":assistant_app_lib": [
-        "@qttools//:help_shared",
-        "@qtbase//:printsupport_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:sql_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":qhelpgenerator_lib": [
-        "@qttools//:help_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:sql_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":designer_app_lib": [
-        "@qttools//:designercomponents_shared",
-        "@qttools//:designer_lib_shared",
-        "@qtbase//:printsupport_shared",
-        "@qtbase//:openglwidgets_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:xml_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":linguist_app_lib": [
-        "@qttools//:uitools_shared",
-        "@qtdeclarative//:quickwidgets_shared",
-        "@qtdeclarative//:quicklayouts_shared",
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:printsupport_shared",
-        "@qtbase//:openglwidgets_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":qdbusviewer_app_lib": [
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:xml_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":pixeltool_app_lib": [
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":qdistancefieldgenerator_app_lib": [
-        "@qtdeclarative//:quick_shared",
-        "@qtdeclarative//:qmlmeta_shared",
-        "@qtdeclarative//:qmlmodels_shared",
-        "@qtdeclarative//:qmlworkerscript_shared",
-        "@qtdeclarative//:qml_shared",
-        "@qtbase//:opengl_shared",
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:network_shared",
-        "@qtbase//:core_shared",
-    ],
-    ":qev_app_lib": [
-        "@qtbase//:widgets_shared",
-        "@qtbase//:gui_shared",
-        "@qtbase//:dbus_shared",
-        "@qtbase//:core_shared",
-    ],
+    for attr_name in ("deps", "lib", "implementation_deps"):
+        val = getattr(ctx.rule.attr, attr_name, None)
+        if not val:
+            continue
+        dep_list = val if type(val) == type([]) else [val]
+        for dep in dep_list:
+            if QtSharedLibraryAspectInfo in dep:
+                ainfo = dep[QtSharedLibraryAspectInfo]
+                trans_dyn.append(ainfo.dynamic_deps)
+                trans_rf.append(ainfo.runfiles_files)
+                trans_qt_libs.append(ainfo.qt_lib_labels)
+
+    return [
+        QtSharedLibraryAspectInfo(
+            dynamic_deps = depset(direct = direct_dyn, transitive = trans_dyn, order = "topological"),
+            runfiles_files = depset(direct = direct_rf, transitive = trans_rf),
+            qt_lib_labels = depset(direct = direct_qt_libs, transitive = trans_qt_libs, order = "topological"),
+        ),
+    ]
+
+_qt_shared_library_aspect = aspect(
+    implementation = _qt_shared_library_aspect_impl,
+    attr_aspects = ["deps", "lib", "implementation_deps"],
+)
+
+def _qt_dynamic_deps_collector_impl(ctx):
+    dyn_depsets = []
+    rf_depsets = []
+    qt_lib_depsets = []
+    runfiles = ctx.runfiles()
+
+    for dep in ctx.attr.dynamic_deps:
+        info = dep[CcSharedLibraryInfo]
+        entry = struct(
+            exports = info.exports,
+            linker_input = info.linker_input,
+            link_once_static_libs = info.link_once_static_libs,
+        )
+        dyn_depsets.append(depset(direct = [entry], transitive = [info.dynamic_deps], order = "topological"))
+        if dep[DefaultInfo].default_runfiles != None:
+            runfiles = runfiles.merge(dep[DefaultInfo].default_runfiles)
+        if dep[DefaultInfo].data_runfiles != None:
+            runfiles = runfiles.merge(dep[DefaultInfo].data_runfiles)
+
+    for dep in ctx.attr.deps + ctx.attr.qt_deps:
+        if QtSharedLibraryAspectInfo in dep:
+            ainfo = dep[QtSharedLibraryAspectInfo]
+            dyn_depsets.append(ainfo.dynamic_deps)
+            rf_depsets.append(ainfo.runfiles_files)
+            qt_lib_depsets.append(ainfo.qt_lib_labels)
+
+    raw_dyn_entries = depset(transitive = dyn_depsets, order = "topological").to_list()
+    seen_dyn_owners = {}
+    deduped_dyn_entries = []
+    transitive_exports = {}
+    for entry in raw_dyn_entries:
+        owner_key = str(entry.linker_input.owner)
+        if owner_key in seen_dyn_owners:
+            continue
+        seen_dyn_owners[owner_key] = True
+        deduped_dyn_entries.append(entry)
+        for exp in entry.exports:
+            transitive_exports[exp] = True
+
+    linker_input_owners = {}
+    for dep in ctx.attr.deps:
+        if CcInfo in dep:
+            for li in dep[CcInfo].linking_context.linker_inputs.to_list():
+                linker_input_owners[str(li.owner)] = li.owner
+
+    active_exports = []
+    seen_active = {}
+    for lbl in depset(transitive = qt_lib_depsets, order = "topological").to_list():
+        s = str(lbl)
+        if s in transitive_exports and s in linker_input_owners and s not in seen_active:
+            seen_active[s] = True
+            active_exports.append(lbl)
+
+    runfiles = runfiles.merge(ctx.runfiles(transitive_files = depset(transitive = rf_depsets)))
+
+    return [
+        DefaultInfo(runfiles = runfiles),
+        CcInfo(),
+        CcSharedLibraryInfo(
+            dynamic_deps = depset(direct = deduped_dyn_entries, order = "topological"),
+            exports = [],
+            link_once_static_libs = [],
+            linker_input = cc_common.create_linker_input(owner = ctx.label),
+        ),
+        CcSharedLibraryHintInfo(
+            owners = active_exports if active_exports else [ctx.label],
+            attributes = [],
+        ),
+    ]
+
+_qt_dynamic_deps_collector = rule(
+    implementation = _qt_dynamic_deps_collector_impl,
+    attrs = {
+        "deps": attr.label_list(aspects = [_qt_shared_library_aspect]),
+        "qt_deps": attr.label_list(aspects = [_qt_shared_library_aspect]),
+        "dynamic_deps": attr.label_list(providers = [CcSharedLibraryInfo]),
+    },
+    provides = [CcInfo, CcSharedLibraryInfo, CcSharedLibraryHintInfo],
+)
+
+# Public, read-only mapping of @qtbase library targets to their cc_shared_library
+# targets for consumers writing plain rules_cc targets. Transitive Qt shared
+# libraries across all Qt modules are resolved automatically via QtSharedLibraryInfo
+# and qt_shared_libs().
+QT_SHARED_LIBS = {
+    "@qtbase//:core": [Label("@qtbase//:core_shared")],
+    "@qtbase//:concurrent": [Label("@qtbase//:concurrent_shared"), Label("@qtbase//:core_shared")],
+    "@qtbase//:dbus": [Label("@qtbase//:dbus_shared"), Label("@qtbase//:core_shared")],
+    "@qtbase//:gui": [Label("@qtbase//:gui_shared"), Label("@qtbase//:dbus_shared"), Label("@qtbase//:core_shared")],
+    "@qtbase//:network": [Label("@qtbase//:network_shared"), Label("@qtbase//:core_shared")],
+    "@qtbase//:opengl": [Label("@qtbase//:opengl_shared"), Label("@qtbase//:gui_shared"), Label("@qtbase//:dbus_shared"), Label("@qtbase//:core_shared")],
+    "@qtbase//:openglwidgets": [Label("@qtbase//:openglwidgets_shared"), Label("@qtbase//:opengl_shared"), Label("@qtbase//:widgets_shared"), Label("@qtbase//:gui_shared"), Label("@qtbase//:dbus_shared"), Label("@qtbase//:core_shared")],
+    "@qtbase//:printsupport": [Label("@qtbase//:printsupport_shared"), Label("@qtbase//:widgets_shared"), Label("@qtbase//:gui_shared"), Label("@qtbase//:dbus_shared"), Label("@qtbase//:core_shared")],
+    "@qtbase//:sql": [Label("@qtbase//:sql_shared"), Label("@qtbase//:core_shared")],
+    "@qtbase//:test": [Label("@qtbase//:test_shared"), Label("@qtbase//:core_shared")],
+    "@qtbase//:widgets": [Label("@qtbase//:widgets_shared"), Label("@qtbase//:gui_shared"), Label("@qtbase//:dbus_shared"), Label("@qtbase//:core_shared")],
+    "@qtbase//:xml": [Label("@qtbase//:xml_shared"), Label("@qtbase//:core_shared")],
 }
 
-def _lbl(s):
-    if type(s) == type("") and s.startswith("@") and not s.startswith("@@"):
-        repo, rest = s[1:].split("//", 1)
-        return Label("@@" + repo + "+//" + rest)
-    return s
+def qt_shared_libs(deps):
+    """Returns a dynamic_deps target list that resolves all Qt `cc_shared_library` dependencies of `deps`.
+
+    Use this with plain `cc_binary`/`cc_test`/`cc_shared_library` targets:
+
+        cc_binary(
+            name = "app",
+            deps = ["@qtbase//:widgets"],
+            dynamic_deps = qt_shared_libs(["@qtbase//:widgets"]),
+        )
+
+    Args:
+      deps: List of Qt library labels (strings or Labels).
+
+    Returns:
+      A list containing a collector target providing `CcSharedLibraryInfo` for `deps`.
+    """
+    helper_name = "_qt_shared_libs_%d" % (hash(repr(deps)) & 0x7fffffff)
+    if not native.existing_rule(helper_name):
+        _qt_dynamic_deps_collector(
+            name = helper_name,
+            deps = list(deps),
+        )
+    return [":" + helper_name]
 
 def _dep_key(dep):
     if type(dep) == type(""):
@@ -2956,62 +237,20 @@ def _dep_key(dep):
     return "//" + lbl.package + ":" + lbl.name
 
 def _has_dep(deps, target_str):
-    target_lbl = _lbl(target_str)
     for d in deps:
-        if d == target_str or d == target_lbl or _dep_key(d) == target_str:
+        if d == target_str or _dep_key(d) == target_str:
             return True
     return False
-
-def _resolve_qt_dynamic_deps(deps, dynamic_deps):
-    """Automatically maps @qtbase library deps to their cc_shared_library dynamic_deps."""
-    if type(deps) != type([]):
-        return dynamic_deps
-    result = [_lbl(d) for d in dynamic_deps] if type(dynamic_deps) == type([]) else []
-    seen = {str(d): True for d in result}
-    for dep in deps:
-        key = _dep_key(dep)
-        for shared_dep in _QTBASE_SHARED_MAP.get(key, _QTBASE_SHARED_MAP.get(dep, [])):
-            lbl_dep = _lbl(shared_dep)
-            if str(lbl_dep) not in seen:
-                seen[str(lbl_dep)] = True
-                result.append(lbl_dep)
-    quick_lbl = str(_lbl("@qtdeclarative//:quick_shared"))
-    opengl_lbl = _lbl("@qtbase//:opengl_shared")
-    if quick_lbl in seen and str(opengl_lbl) not in seen:
-        seen[str(opengl_lbl)] = True
-        result.append(opengl_lbl)
-    return result
-
-# Public, read-only view of the Qt library -> cc_shared_library mapping
-# (F-INF-9), for consumers writing plain rules_cc targets.
-QT_SHARED_LIBS = _QTBASE_SHARED_MAP
-
-def qt_shared_libs(deps):
-    """Returns the Qt `cc_shared_library` targets that `deps` should link against.
-
-    Use this with plain `cc_binary`/`cc_test`/`cc_shared_library` targets:
-
-        cc_binary(
-            name = "app",
-            deps = ["@qtbase//:widgets"],
-            dynamic_deps = qt_shared_libs(["@qtbase//:widgets"]),
-        )
-
-    Args:
-      deps: List of Qt library labels (strings or Labels).
-
-    Returns:
-      A list of `Label`s for the matching `*_shared` targets.
-    """
-    return _resolve_qt_dynamic_deps(list(deps), [])
 
 # Plugins implied by a Qt library dependency (F-INF-4). This mirrors upstream's
 # per-module default plugin sets (`qt_import_plugins` / `QT_DEFAULT_PLUGINS`):
 # a binary that depends on the library automatically links the backends it
 # needs at runtime. Opt out per binary with `autolink_plugins = False`.
+# Note: non-qtbase plugin labels are kept as strings so they are resolved in the
+# caller's repository context (which already has a bazel_dep on that module).
 _QT_IMPLIED_PLUGINS = {
-    "@qtbase//:network": ["@qtbase//:tls_plugins"],
-    "@qtbase//:sql": ["@qtbase//:sqldriver_plugins"],
+    "@qtbase//:network": [Label("@qtbase//:tls_plugins")],
+    "@qtbase//:sql": [Label("@qtbase//:sqldriver_plugins")],
     "@qtsvg//:svg": ["@qtsvg//:qsvg", "@qtsvg//:qsvgicon"],
     "@qtmultimedia//:multimedia": ["@qtmultimedia//:multimedia_plugins"],
     "@qtspeech//:tts": ["@qtspeech//:tts_plugins"],
@@ -3028,40 +267,190 @@ def _add_implied_plugins(lib_deps):
         return lib_deps
     for dep in list(lib_deps):
         for p in _QT_IMPLIED_PLUGINS.get(_dep_key(dep), []):
-            if not _has_dep(lib_deps, p):
-                lib_deps.append(_lbl(p))
+            p_key = _dep_key(p)
+            if not _has_dep(lib_deps, p_key):
+                lib_deps.append(p)
     return lib_deps
+
+_GUI_REPOS = {
+    "@qt3d": True,
+    "@qtcharts": True,
+    "@qtdatavis3d": True,
+    "@qtgraphs": True,
+    "@qtimageformats": True,
+    "@qtlocation": True,
+    "@qtlottie": True,
+    "@qtmultimedia": True,
+    "@qtquick3dphysics": True,
+    "@qtquicktimeline": True,
+    "@qtshadertools": True,
+    "@qtspeech": True,
+    "@qtsvg": True,
+    "@qttools": True,
+    "@qtvirtualkeyboard": True,
+    "@qtwayland": True,
+    "@qtwebview": True,
+}
+
+_QTBASE_GUI_TARGETS = {
+    "gui": True,
+    "widgets": True,
+    "printsupport": True,
+    "opengl": True,
+    "openglwidgets": True,
+    "offscreen": True,
+    "xcb": True,
+    "qxcb_glx_integration": True,
+    "qxcb_egl_integration": True,
+    "cocoa": True,
+    "windows": True,
+    "qgif": True,
+    "qico": True,
+    "qjpeg": True,
+    "imageformats": True,
+    "qmacstyle": True,
+    "qmodernwindowsstyle": True,
+    "style_plugins": True,
+    "composeplatforminputcontextplugin": True,
+    "ibusplatforminputcontextplugin": True,
+    "platforminputcontext_plugins": True,
+    "qxdgdesktopportal": True,
+    "platformtheme_plugins": True,
+    "wayland_client": True,
+    "wl_shell_integration_private": True,
+    "qwayland": True,
+    "qwayland_plugin": True,
+    "qwayland_bradient_decoration_plugin": True,
+    "qwayland_xdg_shell_integration_plugin": True,
+    "qwayland_wl_shell_integration_plugin": True,
+    "qwayland_fullscreen_shell_v1_plugin": True,
+    "qwayland_egl_client_buffer_plugin": True,
+    "qwayland_shm_emulation_server_buffer_plugin": True,
+    "qwayland_drm_egl_server_buffer_plugin": True,
+    "qminimal_plugin": True,
+}
+
+_QTDECLARATIVE_GUI_TARGETS = {
+    "quick": True,
+    "qtquick2plugin": True,
+    "quickwindow": True,
+    "quicklayouts": True,
+    "qquicklayoutsplugin": True,
+    "quickshapes": True,
+    "qmlshapesplugin": True,
+    "quickshapesdesignhelpers": True,
+    "qtquickshapesdesignhelpersplugin": True,
+    "quickshapesdesignhelpersplugin": True,
+    "quickparticles": True,
+    "particlesplugin": True,
+    "quickeffects": True,
+    "effectsplugin": True,
+    "quickvectorimagegenerator": True,
+    "quickvectorimagehelpers": True,
+    "qquickvectorimagehelpersplugin": True,
+    "quickvectorimagehelpersplugin": True,
+    "quickvectorimage": True,
+    "qquickvectorimageplugin": True,
+    "quickvectorimageplugin": True,
+    "quicktemplates2": True,
+    "qtquicktemplates2plugin": True,
+    "quickcontrols2impl": True,
+    "qtquickcontrols2implplugin": True,
+    "quickcontrols2": True,
+    "qtquickcontrols2plugin": True,
+    "quickcontrols2basicstyleimpl": True,
+    "qtquickcontrols2basicstyleimplplugin": True,
+    "quickcontrols2basic": True,
+    "qtquickcontrols2basicstyleplugin": True,
+    "quickcontrols2fusionstyleimpl": True,
+    "qtquickcontrols2fusionstyleimplplugin": True,
+    "quickcontrols2fusion": True,
+    "qtquickcontrols2fusionstyleplugin": True,
+    "quickcontrols2materialstyleimpl": True,
+    "qtquickcontrols2materialstyleimplplugin": True,
+    "quickcontrols2material": True,
+    "qtquickcontrols2materialstyleplugin": True,
+    "quickcontrols2universalstyleimpl": True,
+    "qtquickcontrols2universalstyleimplplugin": True,
+    "quickcontrols2universal": True,
+    "qtquickcontrols2universalstyleplugin": True,
+    "quickcontrols2imaginestyleimpl": True,
+    "qtquickcontrols2imaginestyleimplplugin": True,
+    "quickcontrols2imagine": True,
+    "qtquickcontrols2imaginestyleplugin": True,
+    "quickcontrols2fluentwinui3styleimpl": True,
+    "qtquickcontrols2fluentwinui3styleimplplugin": True,
+    "quickcontrols2fluentwinui3": True,
+    "qtquickcontrols2fluentwinui3styleplugin": True,
+    "quicknativestyle": True,
+    "qtquickcontrols2nativestyleplugin": True,
+    "quickcontrols2macosstyleimpl": True,
+    "qtquickcontrols2macosstyleimplplugin": True,
+    "quickcontrols2macos": True,
+    "qtquickcontrols2macosstyleplugin": True,
+    "quickcontrols2iosstyleimpl": True,
+    "qtquickcontrols2iosstyleimplplugin": True,
+    "quickcontrols2ios": True,
+    "qtquickcontrols2iosstyleplugin": True,
+    "quickcontrols2windowsstyleimpl": True,
+    "qtquickcontrols2windowsstyleimplplugin": True,
+    "quickcontrols2windows": True,
+    "qtquickcontrols2windowsstyleplugin": True,
+    "quickdialogs2utils": True,
+    "quickdialogs2quickimpl": True,
+    "qtquickdialogs2quickimplplugin": True,
+    "quickdialogs2": True,
+    "qtquickdialogsplugin": True,
+    "labsanimation": True,
+    "labsanimationplugin": True,
+    "labsplatform": True,
+    "qtlabsplatformplugin": True,
+    "labswavefrontmesh": True,
+    "qmlwavefrontmeshplugin": True,
+    "labssharedimage": True,
+    "sharedimageplugin": True,
+    "qtlabssharedimageplugin": True,
+    "quickwidgets": True,
+    "quicktest": True,
+    "quicktestplugin": True,
+    "qmldbg_inspector": True,
+    "qmldbg_preview": True,
+    "qmldbg_quickprofiler": True,
+}
+
+_OTHER_GUI_KEYS = {
+    "@qtgrpc//:protobufqtguitypes": True,
+    "@qtpositioning//:positioningquick": True,
+    "@qtpositioning//:positioningquickplugin": True,
+    "@qtremoteobjects//:remoteobjectsqml": True,
+    "@qtremoteobjects//:declarative_remoteobjects": True,
+    "@qtscxml//:statemachine": True,
+    "@qtscxml//:statemachineqml": True,
+    "@qtscxml//:qtqmlstatemachine": True,
+    ":designer_app_lib": True,
+    ":linguist_app_lib": True,
+    ":qdbusviewer_app_lib": True,
+    ":pixeltool_app_lib": True,
+    ":qdistancefieldgenerator_app_lib": True,
+    ":qev_app_lib": True,
+}
 
 def _needs_gui_plugin(deps):
     if type(deps) != type([]):
         return False
     for dep in deps:
         key = _dep_key(dep)
-        if key in (
-            "@qtbase//:gui",
-            ":gui",
-            "@qtbase//:opengl",
-            ":opengl",
-            "@qtbase//:openglwidgets",
-            ":openglwidgets",
-            "@qtbase//:widgets",
-            ":widgets",
-            "@qtdeclarative//:quick",
-            "@qtdeclarative//:quickcontrols2",
-            "@qtdeclarative//:quickwidgets",
-            "@qtcharts//:charts",
-            "@qtlocation//:location",
-            "@qttools//:uitools",
-            "@qttools//:designer_lib",
-            "@qttools//:designercomponents",
-            "@qttools//:help",
-            ":designer_app_lib",
-            ":linguist_app_lib",
-            ":qdbusviewer_app_lib",
-            ":pixeltool_app_lib",
-            ":qdistancefieldgenerator_app_lib",
-            ":qev_app_lib",
-        ) or "@qtbase//:gui_shared" in _QTBASE_SHARED_MAP.get(key, _QTBASE_SHARED_MAP.get(dep, [])):
+        if key in _OTHER_GUI_KEYS:
+            return True
+        repo = key.split("//", 1)[0] if "//" in key else ""
+        target = key.rsplit(":", 1)[-1]
+        if repo in _GUI_REPOS:
+            return True
+        if repo == "@qtquick3d" and target != "glslparser":
+            return True
+        if repo in ("@qtbase", "") and target in _QTBASE_GUI_TARGETS:
+            return True
+        if repo in ("@qtdeclarative", "") and target in _QTDECLARATIVE_GUI_TARGETS:
             return True
     return False
 
@@ -3075,31 +464,26 @@ def _needs_gui_plugin(deps):
 # on Linux probes `wayland` and `xcb` first whenever it detects a desktop
 # session, warning for each plugin that is not linked in. Pinning a
 # `;`-separated list keeps desktop runs quiet and headless runs working.
-#
-# Extend as more plugins gain Bazel targets, e.g.
-#   "@platforms//os:linux": {"plugins": ["@qtbase//:xcb", "@qtwayland//:wayland"],
-#                            "env": {"QT_QPA_PLATFORM": "wayland;xcb;offscreen"}},
-#   "@platforms//os:macos": {"plugins": ["@qtbase//:cocoa"], "env": {}},
 _QPA_PLATFORM_CONFIG = {
     Label("@platforms//os:linux"): {
         "plugins": [
-            "@qtbase//:xcb",
-            "@qtbase//:qxcb_glx_integration",
-            "@qtbase//:qxcb_egl_integration",
-            "@qtbase//:qwayland",
-            "@qtbase//:qwayland_xdg_shell_integration_plugin",
-            "@qtbase//:qwayland_wl_shell_integration_plugin",
-            "@qtbase//:qwayland_bradient_decoration_plugin",
-            "@qtbase//:qwayland_egl_client_buffer_plugin",
+            Label("@qtbase//:xcb"),
+            Label("@qtbase//:qxcb_glx_integration"),
+            Label("@qtbase//:qxcb_egl_integration"),
+            Label("@qtbase//:qwayland"),
+            Label("@qtbase//:qwayland_xdg_shell_integration_plugin"),
+            Label("@qtbase//:qwayland_wl_shell_integration_plugin"),
+            Label("@qtbase//:qwayland_bradient_decoration_plugin"),
+            Label("@qtbase//:qwayland_egl_client_buffer_plugin"),
         ],
         "env": {"QT_QPA_PLATFORM": "xcb;wayland;offscreen"},
     },
     Label("@platforms//os:macos"): {
-        "plugins": ["@qtbase//:cocoa"],
+        "plugins": [Label("@qtbase//:cocoa")],
         "env": {"QT_QPA_PLATFORM": "cocoa;offscreen"},
     },
     Label("@platforms//os:windows"): {
-        "plugins": ["@qtbase//:windows"],
+        "plugins": [Label("@qtbase//:windows")],
         "env": {"QT_QPA_PLATFORM": "windows;offscreen"},
     },
     "//conditions:default": {
@@ -3114,43 +498,22 @@ def _update_dict(source, overrides):
     result.update(overrides)
     return result
 
-def _finalize_dynamic_deps(dynamic_deps):
-    if type(dynamic_deps) != type([]):
-        return dynamic_deps
-    dbus_lbl = _lbl("@qtbase//:dbus_shared")
-    if dbus_lbl in dynamic_deps or "@qtbase//:dbus_shared" in dynamic_deps:
-        return [d for d in dynamic_deps if d != dbus_lbl and d != "@qtbase//:dbus_shared"] + select({
-            Label("@platforms//os:windows"): [],
-            "//conditions:default": [dbus_lbl],
-        })
-    return dynamic_deps
-
-def _platform_plugin_selects(deps, dynamic_deps, env):
+def _platform_plugin_selects(deps, env):
     """Builds `select()`s for the per-OS QPA plugins and runtime environment.
 
-    Plugins (and their shared libs) already present in `deps` / `dynamic_deps`
-    are skipped so that Bazel never sees duplicate labels. Keys in `env` take
-    precedence over the per-OS defaults.
+    Plugins already present in `deps` are skipped so that Bazel never sees
+    duplicate labels. Keys in `env` take precedence over the per-OS defaults.
 
     Returns:
-      A `(deps_select, dynamic_deps_select, env_select)` tuple.
+      A `(deps_select, env_select)` tuple.
     """
     deps_by_os = {}
-    dynamic_deps_by_os = {}
     env_by_os = {}
-    dbus_lbl = _lbl("@qtbase//:dbus_shared")
-    win_cond = Label("@platforms//os:windows")
-    existing_dyn_strs = {str(d): True for d in dynamic_deps}
     for condition, cfg in _QPA_PLATFORM_CONFIG.items():
-        new_plugins = [_lbl(p) for p in cfg["plugins"] if not _has_dep(deps, p)]
+        new_plugins = [p for p in cfg["plugins"] if not _has_dep(deps, _dep_key(p))]
         deps_by_os[condition] = new_plugins
-        dynamic_deps_by_os[condition] = [
-            d
-            for d in _resolve_qt_dynamic_deps(new_plugins, [])
-            if str(d) not in existing_dyn_strs and (condition != win_cond or d != dbus_lbl)
-        ]
         env_by_os[condition] = _update_dict(cfg["env"], env)
-    return select(deps_by_os), select(dynamic_deps_by_os), select(env_by_os)
+    return select(deps_by_os), select(env_by_os)
 
 def qt_export_header(name, module_name = None, module_Header = None, module_infix = None, macro_prefix = None, out = None, **kwargs):
     """Generates a Qt module export header (qt<module>exports.h)."""
@@ -3531,7 +894,7 @@ def _with_building_qt(local_defines):
             return local_defines
     return ["QT_BUILDING_QT"] + local_defines
 
-def qt_plugin_FixMe(
+def qt_plugin(
         name,
         plugin_class_name,
         srcs = [],
@@ -3546,6 +909,7 @@ def qt_plugin_FixMe(
         defines = [],
         local_defines = [],
         deps = [],
+        linkopts = [],
         moc_unity = True,
         target_compatible_with = None,
         **kwargs):
@@ -3584,10 +948,14 @@ def qt_plugin_FixMe(
         defines = defines,
         local_defines = _with_building_qt(local_defines),
         deps = deps,
+        linkopts = linkopts,
         moc_unity = moc_unity,
         target_compatible_with = target_compatible_with,
         testonly = testonly,
     )
+
+# Backwards-compatible alias while module overlays migrate to qt_plugin.
+qt_plugin_FixMe = qt_plugin
 
 def qt_ui_library(name, src = None, uis = None, deps = None, **kwargs):
     """Compiles one or more Qt Designer .ui files to C++ headers and wraps them in a cc_library.
@@ -3731,6 +1099,9 @@ def qt_cc_library(
         local_defines = [],
         deps = [],
         moc_unity = True,
+        create_shared = False,
+        dynamic_deps = [],
+        exports_filter = [],
         **kwargs):
     """A cc_library wrapper that runs Qt's moc on headers and sources.
 
@@ -3748,6 +1119,9 @@ def qt_cc_library(
       deps: Dependencies.
       moc_unity: Compile moc outputs through a single `mocs_compilation.cpp`
         (CMake AUTOMOC behaviour).
+      create_shared: Whether to also create `<name>_shared` and provide `QtSharedLibraryInfo`.
+      dynamic_deps: Shared library dependencies when `create_shared` is True.
+      exports_filter: Forwarded to `cc_shared_library` when `create_shared` is True.
       **kwargs: Forwarded to `cc_library`.
     """
     actual_moc_hdrs = hdrs if moc_hdrs == None else moc_hdrs
@@ -3766,13 +1140,39 @@ def qt_cc_library(
         else:
             moc_srcs = []
 
+    if create_shared or bool(dynamic_deps):
+        qt_internal_library(
+            name = name,
+            srcs = srcs,
+            hdrs = hdrs,
+            moc_hdrs = actual_moc_hdrs,
+            moc_srcs = moc_srcs,
+            includes = includes,
+            copts = copts,
+            defines = defines,
+            local_defines = local_defines,
+            deps = deps + (select({
+                Label("@platforms//os:linux"): [Label("@qtbase//:glvnd_stubs")],
+                "//conditions:default": [],
+            }) if _needs_gui_plugin(deps) else []),
+            moc_unity = moc_unity,
+            create_shared = create_shared,
+            dynamic_deps = dynamic_deps,
+            exports_filter = exports_filter,
+            **kwargs
+        )
+        return
+
     target_compatible_with = kwargs.get("target_compatible_with", None)
     testonly = kwargs.get("testonly", None)
+    tags = kwargs.get("tags", None)
     common_kwargs = {}
     if target_compatible_with != None:
         common_kwargs["target_compatible_with"] = target_compatible_with
     if testonly != None:
         common_kwargs["testonly"] = testonly
+    if tags != None:
+        common_kwargs["tags"] = tags
 
     extra_srcs = []
     extra_deps = []
@@ -3852,11 +1252,11 @@ def qt_cc_binary(
         autolink_plugins = True,
         win32_gui = False,
         **kwargs):
-    """Builds a Qt C++ binary linked dynamically against @qtbase's LGPL cc_shared_library targets.
+    """Builds a Qt C++ binary linked dynamically against Qt's LGPL cc_shared_library targets.
 
     Qt library deps (`@qtbase//:core`, `:gui`, `:widgets`, ...) are mapped automatically to
-    the matching `*_shared` targets in `dynamic_deps`. GUI binaries get the `offscreen` QPA
-    plugin linked in statically.
+    the matching `*_shared` targets via `QtSharedLibraryInfo`. GUI binaries get the `offscreen`
+    and per-OS QPA plugins linked in statically.
 
     Args:
       name: Target name.
@@ -3885,21 +1285,23 @@ def qt_cc_binary(
 
     target_compatible_with = kwargs.get("target_compatible_with", None)
     testonly = kwargs.get("testonly", None)
+    tags = kwargs.get("tags", None)
     common_kwargs = {}
     if target_compatible_with != None:
         common_kwargs["target_compatible_with"] = target_compatible_with
     if testonly != None:
         common_kwargs["testonly"] = testonly
+    if tags != None:
+        common_kwargs["tags"] = tags
 
     lib_deps = list(deps)
-    if _needs_gui_plugin(lib_deps):
+    is_gui = _needs_gui_plugin(lib_deps)
+    if is_gui:
         for p in ("@qtbase//:offscreen", "@qtbase//:qgif", "@qtbase//:qico", "@qtbase//:qjpeg"):
             if not _has_dep(lib_deps, p):
-                lib_deps.append(_lbl(p))
+                lib_deps.append(Label(p))
     if autolink_plugins:
         _add_implied_plugins(lib_deps)
-
-    resolved_dynamic_deps = _resolve_qt_dynamic_deps(lib_deps, dynamic_deps)
 
     extra_srcs = []
     extra_deps = []
@@ -3945,22 +1347,16 @@ def qt_cc_binary(
     cc_binary_kwargs = dict(kwargs)
     cc_binary_kwargs["features"] = list(cc_binary_kwargs.get("features", [])) + ["compiler_param_file"]
     binary_deps = lib_deps + extra_deps
-    if _needs_gui_plugin(lib_deps):
-        # Interactive binaries additionally link the native QPA plugin for the
-        # target OS (see _QPA_PLATFORM_CONFIG); tests only use offscreen.
-        deps_sel, dyn_sel, env_sel = _platform_plugin_selects(
+    if is_gui:
+        deps_sel, env_sel = _platform_plugin_selects(
             lib_deps,
-            resolved_dynamic_deps,
             cc_binary_kwargs.pop("env", {}),
         )
         binary_deps = binary_deps + deps_sel + select({
             Label("@platforms//os:linux"): [Label("@qtbase//:glvnd_stubs")],
             "//conditions:default": [],
         })
-        resolved_dynamic_deps = _finalize_dynamic_deps(resolved_dynamic_deps) + dyn_sel
         cc_binary_kwargs["env"] = env_sel
-    else:
-        resolved_dynamic_deps = _finalize_dynamic_deps(resolved_dynamic_deps)
 
     if win32_gui:
         binary_deps = binary_deps + select({
@@ -3972,13 +1368,21 @@ def qt_cc_binary(
             "//conditions:default": [],
         })
 
+    dyn_helper = name + "_qt_dynamic_deps"
+    _qt_dynamic_deps_collector(
+        name = dyn_helper,
+        deps = binary_deps,
+        dynamic_deps = dynamic_deps,
+        **common_kwargs
+    )
+
     cc_binary(
         name = name,
         srcs = srcs + extra_srcs,
         copts = copts + QT_PLATFORM_COPTS,
         defines = defines + QT_PLATFORM_DEFINES,
-        deps = binary_deps,
-        dynamic_deps = resolved_dynamic_deps,
+        deps = [":" + dyn_helper] + binary_deps,
+        dynamic_deps = [":" + dyn_helper],
         **cc_binary_kwargs
     )
 
@@ -3996,7 +1400,7 @@ def qt_cc_test(
         env = {},
         autolink_plugins = True,
         **kwargs):
-    """Builds a Qt C++ test linked dynamically against @qtbase's LGPL cc_shared_library targets.
+    """Builds a Qt C++ test linked dynamically against Qt's LGPL cc_shared_library targets.
 
     Same behaviour as `qt_cc_binary` (including the per-OS QPA plugins), but GUI tests
     default to `QT_QPA_PLATFORM=offscreen` so they stay headless under `bazel test`.
@@ -4026,20 +1430,21 @@ def qt_cc_test(
 
     target_compatible_with = kwargs.get("target_compatible_with", None)
     testonly = kwargs.get("testonly", True)
+    tags = kwargs.get("tags", None)
     common_kwargs = {"testonly": testonly}
     if target_compatible_with != None:
         common_kwargs["target_compatible_with"] = target_compatible_with
+    if tags != None:
+        common_kwargs["tags"] = tags
 
     lib_deps = list(deps)
     is_gui = _needs_gui_plugin(lib_deps)
     if is_gui:
         for p in ("@qtbase//:offscreen", "@qtbase//:qgif", "@qtbase//:qico", "@qtbase//:qjpeg"):
             if not _has_dep(lib_deps, p):
-                lib_deps.append(_lbl(p))
+                lib_deps.append(Label(p))
     if autolink_plugins:
         _add_implied_plugins(lib_deps)
-
-    resolved_dynamic_deps = _resolve_qt_dynamic_deps(lib_deps, dynamic_deps)
 
     extra_srcs = []
     extra_deps = []
@@ -4089,29 +1494,33 @@ def qt_cc_test(
         # run interactively (e.g. --test_env=QT_QPA_PLATFORM=xcb), but default
         # to offscreen so sandboxed `bazel test` stays headless. Precedence:
         # caller `env` > offscreen > per-OS default.
-        deps_sel, dyn_sel, test_env = _platform_plugin_selects(
+        deps_sel, test_env = _platform_plugin_selects(
             lib_deps,
-            resolved_dynamic_deps,
             _update_dict({"QT_QPA_PLATFORM": "offscreen"}, env),
         )
         test_deps = test_deps + deps_sel + select({
             Label("@platforms//os:linux"): [Label("@qtbase//:glvnd_stubs")],
             "//conditions:default": [],
         })
-        resolved_dynamic_deps = _finalize_dynamic_deps(resolved_dynamic_deps) + dyn_sel
-    else:
-        resolved_dynamic_deps = _finalize_dynamic_deps(resolved_dynamic_deps)
 
     cc_test_kwargs = dict(kwargs)
     cc_test_kwargs["features"] = list(cc_test_kwargs.get("features", [])) + ["compiler_param_file"]
+
+    dyn_helper = name + "_qt_dynamic_deps"
+    _qt_dynamic_deps_collector(
+        name = dyn_helper,
+        deps = test_deps,
+        dynamic_deps = dynamic_deps,
+        **common_kwargs
+    )
 
     cc_test(
         name = name,
         srcs = srcs + extra_srcs,
         copts = copts + QT_PLATFORM_COPTS,
         defines = defines + QT_PLATFORM_DEFINES,
-        deps = test_deps,
-        dynamic_deps = resolved_dynamic_deps,
+        deps = [":" + dyn_helper] + test_deps,
+        dynamic_deps = [":" + dyn_helper],
         env = test_env,
         **cc_test_kwargs
     )
@@ -4125,8 +1534,8 @@ def qt_cc_shared_library(
         **kwargs):
     """A `cc_shared_library` that links Qt dynamically (F-INF-9).
 
-    The Qt libraries listed in `qt_deps` are resolved to their `*_shared`
-    counterparts (including transitive Qt modules) and added to
+    The Qt libraries used by `deps` (and any listed in `qt_deps`) are resolved
+    to their `*_shared` counterparts via `QtSharedLibraryInfo` and added to
     `dynamic_deps`, so the resulting `.so`/`.dll` does not embed a private
     copy of QtCore/QtGui/... (which would break `QCoreApplication`,
     metatype and plugin singletons shared across libraries).
@@ -4134,14 +1543,14 @@ def qt_cc_shared_library(
     Args:
       name: Target name.
       deps: Root `cc_library` targets of the shared library.
-      qt_deps: Qt library labels used (directly or transitively) by `deps`,
-        e.g. `["@qtbase//:widgets"]`. Defaults to `["@qtbase//:core"]`.
+      qt_deps: Optional extra Qt library labels used by `deps`,
+        e.g. `["@qtbase//:widgets"]`. Defaults to `[Label("@qtbase//:core")]`.
       dynamic_deps: Extra `cc_shared_library` deps.
       exports_filter: Forwarded to `cc_shared_library`.
       **kwargs: Forwarded to `cc_shared_library`.
     """
     if qt_deps == None:
-        qt_deps = ["@qtbase//:core"]
+        qt_deps = [Label("@qtbase//:core")]
     user_link_flags = kwargs.pop("user_link_flags", [])
     if "shared_lib_name" not in kwargs:
         # MinGW links dynamic deps with -l<name>, which only resolves a DLL
@@ -4150,10 +1559,27 @@ def qt_cc_shared_library(
             Label("@platforms//os:windows"): "lib" + name + ".dll",
             "//conditions:default": "",
         })
+    common_kwargs = {}
+    if kwargs.get("target_compatible_with") != None:
+        common_kwargs["target_compatible_with"] = kwargs.get("target_compatible_with")
+    if kwargs.get("testonly") != None:
+        common_kwargs["testonly"] = kwargs.get("testonly")
+    if kwargs.get("tags") != None:
+        common_kwargs["tags"] = kwargs.get("tags")
+
+    dyn_helper = name + "_qt_dynamic_deps"
+    _qt_dynamic_deps_collector(
+        name = dyn_helper,
+        deps = deps,
+        qt_deps = list(qt_deps),
+        dynamic_deps = dynamic_deps,
+        **common_kwargs
+    )
+
     cc_shared_library(
         name = name,
-        deps = deps,
-        dynamic_deps = _finalize_dynamic_deps(_resolve_qt_dynamic_deps(list(qt_deps), dynamic_deps)),
+        deps = [":" + dyn_helper] + list(deps),
+        dynamic_deps = [":" + dyn_helper],
         exports_filter = exports_filter,
         user_link_flags = user_link_flags + QT_SHARED_PLATFORM_LINKOPTS,
         **kwargs

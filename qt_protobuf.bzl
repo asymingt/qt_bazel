@@ -161,9 +161,9 @@ def qt_protobuf_gen(
       **kwargs: Additional rule attributes.
     """
     if protoc_tool == None:
-        protoc_tool = Label("@qtgrpc//:protoc")
+        protoc_tool = "@qtgrpc//:protoc"
     if plugin_tool == None:
-        plugin_tool = Label("@qtgrpc//:qtprotobufgen")
+        plugin_tool = "@qtgrpc//:qtprotobufgen"
     _qt_protobuf_gen_rule(
         name = name,
         protos = protos,
@@ -181,12 +181,14 @@ def qt_protobuf_gen(
         name = name + "_hdrs",
         srcs = [":" + name],
         output_group = "hdrs",
+        target_compatible_with = kwargs.get("target_compatible_with"),
         testonly = kwargs.get("testonly"),
     )
     native.filegroup(
         name = name + "_srcs",
         srcs = [":" + name],
         output_group = "srcs",
+        target_compatible_with = kwargs.get("target_compatible_with"),
         testonly = kwargs.get("testonly"),
     )
 
@@ -342,9 +344,9 @@ def qt_grpc_gen(
       **kwargs: Additional rule attributes.
     """
     if protoc_tool == None:
-        protoc_tool = Label("@qtgrpc//:protoc")
+        protoc_tool = "@qtgrpc//:protoc"
     if plugin_tool == None:
-        plugin_tool = Label("@qtgrpc//:qtgrpcgen")
+        plugin_tool = "@qtgrpc//:qtgrpcgen"
     _qt_grpc_gen_rule(
         name = name,
         protos = protos,
@@ -363,11 +365,13 @@ def qt_grpc_gen(
         name = name + "_hdrs",
         srcs = [":" + name],
         output_group = "hdrs",
+        target_compatible_with = kwargs.get("target_compatible_with"),
         testonly = kwargs.get("testonly"),
     )
     native.filegroup(
         name = name + "_srcs",
         srcs = [":" + name],
         output_group = "srcs",
+        target_compatible_with = kwargs.get("target_compatible_with"),
         testonly = kwargs.get("testonly"),
     )

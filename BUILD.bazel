@@ -1,11 +1,24 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_license//rules:license.bzl", "license")
 load("@rules_license//rules:license_kind.bzl", "license_kind")
+load(":qt_internal_library.bzl", "qt_linkable_more_than_once_hint")
 load(":qt_tools.bzl", "qt_write_file")
 
 package(
     default_applicable_licenses = [":license"],
     default_visibility = ["//visibility:public"],
+)
+
+# Marks @rules_cc//cc/runfiles:runfiles and @zlib//:zlib as
+# LINKABLE_MORE_THAN_ONCE within Qt's cc_shared_library graph, avoiding the
+# need to patch @rules_cc or @zlib in the root MODULE.bazel.
+qt_linkable_more_than_once_hint(
+    name = "runfiles_linkable_hint",
+    tags = ["LINKABLE_MORE_THAN_ONCE"],
+    targets = [
+        "@rules_cc//cc/runfiles:runfiles",
+        "@zlib//:zlib",
+    ],
 )
 
 license_kind(
@@ -190,6 +203,11 @@ cc_library(
         "-fvisibility-inlines-hidden",
     ],
     tags = ["LINKABLE_MORE_THAN_ONCE"],
+    target_compatible_with = select({
+        "@rules_cc//cc/compiler:clang-cl": ["@platforms//:incompatible"],
+        "@rules_cc//cc/compiler:msvc-cl": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
     visibility = ["//visibility:public"],
 )
 

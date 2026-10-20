@@ -104,15 +104,26 @@ def _qt_deploy_impl(ctx):
         command = """
 set -euo pipefail
 stage="$(mktemp -d)"
-trap 'rm -rf "$stage"' EXIT
+trap 'rm -rf "$stage" "$stage.list"' EXIT
 mkdir -p "$stage/{root}/plugins" "$stage/{root}/qml"
 while IFS="$(printf '\\t')" read -r src dest; do
   mkdir -p "$stage/$(dirname "$dest")"
   cp -L "$src" "$stage/$dest"
 done < "{manifest}"
 chmod +x "$stage/{bindir}/{exe}"
-tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
-    -cf "{out}" -C "$stage" "{top}"
+case "$(tar --version 2>/dev/null)" in
+*"GNU tar"*)
+  tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+      -cf "{out}" -C "$stage" "{top}"
+  ;;
+*)
+  # bsdtar (macOS exec hosts) has no --sort/--mtime: reset the mtimes and
+  # archive an explicitly sorted member list instead.
+  find "$stage/{top}" -exec env TZ=UTC touch -h -t 197001010000 {{}} +
+  (cd "$stage" && find "{top}" | LC_ALL=C sort) > "$stage.list"
+  tar --uid 0 --gid 0 --numeric-owner -n -cf "{out}" -C "$stage" -T "$stage.list"
+  ;;
+esac
 """.format(
             root = root,
             manifest = manifest.path,
